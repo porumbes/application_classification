@@ -13,13 +13,14 @@
 typedef struct Table {
   uint64_t num_rows;
   uint64_t num_cols;
-  uint64_t * table;
+  uint64_t *srcs;
+  uint64_t *dsts;
+  uint64_t *table;
 } Table;
 
 typedef struct Graph {
   uint64_t num_edges;
   uint64_t num_vertices;
-  uint64_t * starts;
   Table Vtable;
   Table Etable;
 } Graph;
@@ -55,6 +56,6 @@ void FMax(Graph *, Graph *, double *, double *, double *, double *);
 void RMax(Graph *, Graph *, double *, double *, double *, double *);
 void MU(Graph *, Graph *, double *, double *, double *, double *);
 
-void run_iteration(Graph *, Graph *, WorkArrays&, WorkArrays&);
+void run_iteration(Graph *, Graph *, Graph *, Graph *, WorkArrays&, WorkArrays&);
 
 #endif

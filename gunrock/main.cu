@@ -18,8 +18,23 @@ Graph constructGraph(Table * Vtable, Table * Etable) {
 void table2device(Table* d_table, Table* h_table) {
   d_table->num_rows = h_table->num_rows;
   d_table->num_cols = h_table->num_cols;
+
   cudaMalloc((void**)&d_table->table, h_table->num_rows * h_table->num_cols * sizeof(uint64_t));
-  cudaMemcpy(d_table->table, h_table->table, h_table->num_rows * h_table->num_cols * sizeof(uint64_t), cudaMemcpyHostToDevice);
+  cudaMemcpy(d_table->table, h_table->table,
+    h_table->num_rows * h_table->num_cols * sizeof(uint64_t), cudaMemcpyHostToDevice);
+
+  uint64_t srcs[d_table->num_rows];
+  uint64_t dsts[d_table->num_rows];
+  for(uint64_t i = 0; i < d_table->num_rows; i++) {
+    srcs[i] = h_table->table[i * d_table->num_cols];
+    dsts[i] = h_table->table[i * d_table->num_cols + 1];
+  }
+
+  cudaMalloc((void**)&d_table->srcs, h_table->num_rows * sizeof(uint64_t));
+  cudaMalloc((void**)&d_table->dsts, h_table->num_rows * sizeof(uint64_t));
+
+  cudaMemcpy(d_table->srcs, srcs, h_table->num_rows * sizeof(uint64_t), cudaMemcpyHostToDevice);
+  cudaMemcpy(d_table->dsts, dsts, h_table->num_rows * sizeof(uint64_t), cudaMemcpyHostToDevice);
 }
 
 
@@ -68,8 +83,12 @@ int main ( int argc, char * argv[] ) {
   uint64_t DV = h_Data_Graph.num_vertices;
   uint64_t PV = h_Pattern_Graph.num_vertices;
 
-  for (uint64_t iter = 0; iter < PV; iter ++) {
-      run_iteration(&h_Data_Graph, &h_Pattern_Graph, h_WA, d_WA);
+  for (uint64_t i = 0; i < PV; i++) {
+      run_iteration(
+        &h_Data_Graph, &h_Pattern_Graph,
+        &d_Data_Graph, &d_Pattern_Graph,
+        h_WA, d_WA
+      );
   }
 
   // --

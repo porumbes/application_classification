@@ -151,6 +151,7 @@ void initializeWorkArrays(
 
   // Pairwise distances
   device2host(h_WA, d_WA, DV, DE, PV, PE);
+    // Pairwise distance computation
     Init_CV_MU(h_Data_Graph, h_Pattern_Graph, h_WA.CV, h_WA.MU);
   host2device(h_WA, d_WA, DV, DE, PV, PE);
 
@@ -165,9 +166,11 @@ void initializeWorkArrays(
   d_VFmax_VRmax(d_Data_Graph, d_Pattern_Graph, d_WA.VF, d_WA.VR, d_WA.VFmax, d_WA.VRmax);
 
   device2host(h_WA, d_WA, DV, DE, PV, PE);
+    // Max reduction over data edges
     FMax(h_Data_Graph, h_Pattern_Graph, h_WA.Cnull, h_WA.VRmax, h_WA.FE, h_WA.FMax);
     RMax(h_Data_Graph, h_Pattern_Graph, h_WA.Cnull, h_WA.VFmax, h_WA.RE, h_WA.RMax);
   host2device(h_WA, d_WA, DV, DE, PV, PE);
 
   device2host(h_WA, d_WA, DV, DE, PV, PE);
+  host2device(h_WA, d_WA, DV, DE, PV, PE);
 }

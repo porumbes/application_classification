@@ -13,5 +13,6 @@ void d_NormProb(uint64_t, uint64_t, double*);
 void d_Init_VR_VF(Graph*, Graph*, double*, double*, double*);
 void d_Init_CE_RE_FE(Graph*, Graph*, double*, double*, double*);
 void d_VF_VR(Graph*, Graph*, double*, double*, double*, double*, double*);
+void d_UpdateMU(Graph*, Graph*, double*, double*, double*, double*);
 
 #endif

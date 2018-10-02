@@ -3,6 +3,8 @@
 #include "main.h"
 #include <cub/cub.cuh>
 
+#define THREAD 1024
+
 // --
 // Helpers
 
@@ -169,18 +171,17 @@ void d_VFmax_VRmax(Graph * d_Data_Graph, Graph * d_Pattern_Graph,
   uint64_t num_rows = d_Data_Graph->num_vertices; // DV
   uint64_t num_cols = d_Pattern_Graph->num_edges; // PE
 
-  uint64_t thread = 1024;
-  uint64_t block  = 1 + (num_rows * num_cols) / thread;
-  assert(thread * block > num_rows * num_cols);
+  uint64_t block  = 1 + (num_rows * num_cols) / THREAD;
+  assert(THREAD * block > num_rows * num_cols);
 
   double *d_VFt;
   cudaMalloc((void**)&d_VFt, num_rows * num_cols * sizeof(double));
-  __transpose<<<block, thread>>>(d_VFt, d_VF, num_rows, num_cols);
+  __transpose<<<block, THREAD>>>(d_VFt, d_VF, num_rows, num_cols);
   d_rowmax(d_VFmax, d_VFt, num_cols, num_rows);
 
   double *d_VRt;
   cudaMalloc((void**)&d_VRt, num_rows * num_cols * sizeof(double));
-  __transpose<<<block, thread>>>(d_VRt, d_VR, num_rows, num_cols);
+  __transpose<<<block, THREAD>>>(d_VRt, d_VR, num_rows, num_cols);
   d_rowmax(d_VRmax, d_VRt, num_cols, num_rows);
 
   cudaFree(d_VFt);
@@ -195,9 +196,8 @@ void d_NormProb(const uint64_t num_rows, const uint64_t num_cols, double *d_x) {
   // --------------------------
   // Prep
 
-  uint64_t thread = 1024;
-  uint64_t block  = 1 + (num_rows * num_cols) / thread;
-  assert(thread * block > num_rows * num_cols);
+  uint64_t block  = 1 + (num_rows * num_cols) / THREAD;
+  assert(THREAD * block > num_rows * num_cols);
 
   double *d_storage;
   double h_storage[num_cols];
@@ -208,7 +208,7 @@ void d_NormProb(const uint64_t num_rows, const uint64_t num_cols, double *d_x) {
 
   double *d_xt;
   cudaMalloc((void**)&d_xt, num_rows * num_cols * sizeof(double));
-  __transpose<<<block, thread>>>(d_xt, d_x, num_rows, num_cols);
+  __transpose<<<block, THREAD>>>(d_xt, d_x, num_rows, num_cols);
 
   d_rowmax(d_storage, d_xt, num_cols, num_rows);
   cudaMemcpy(h_storage, d_storage, num_cols * sizeof(double), cudaMemcpyDeviceToHost);
@@ -216,7 +216,7 @@ void d_NormProb(const uint64_t num_rows, const uint64_t num_cols, double *d_x) {
   // --------------------------------
   // Subtract max from columns
 
-  __rowSubExp<<<block, thread>>>(d_xt, num_cols, num_rows, d_storage);
+  __rowSubExp<<<block, THREAD>>>(d_xt, num_cols, num_rows, d_storage);
 
   // --------------------------------
   // Sum columns
@@ -227,12 +227,12 @@ void d_NormProb(const uint64_t num_rows, const uint64_t num_cols, double *d_x) {
   // ---------------------------------
   // Subtract log-sum from columns
 
-  __rowSubLog<<<block, thread>>>(d_xt, num_cols, num_rows, d_storage);
+  __rowSubLog<<<block, THREAD>>>(d_xt, num_cols, num_rows, d_storage);
 
   // ---------------------------------
   // Transpose back to original shape
 
-  __transpose<<<block, thread>>>(d_x, d_xt, num_cols, num_rows);
+  __transpose<<<block, THREAD>>>(d_x, d_xt, num_cols, num_rows);
 
   cudaFree(d_xt);
   cudaFree(d_storage);
@@ -274,11 +274,10 @@ void d_Init_VR_VF(Graph * d_Data_Graph, Graph * d_Pattern_Graph, double * MU, do
 
   uint64_t* d_PAttr = (uint64_t *)d_Pattern_Graph->Etable.table;
 
-  int thread = 1024;
-  int block  = 1 + (num_DV * num_PE) / thread;
-  assert(thread * block > num_DV * num_PE);
+  int block  = 1 + (num_DV * num_PE) / THREAD;
+  assert(THREAD * block > num_DV * num_PE);
 
-  __d_Init_VR_VF<<<block, thread>>>(
+  __d_Init_VR_VF<<<block, THREAD>>>(
     num_AT,
     num_DV,
     num_PE,
@@ -321,11 +320,10 @@ void d_Init_CE_RE_FE(Graph * d_Data_Graph, Graph * d_Pattern_Graph,
   double * d_DAttr  = (double *) d_Data_Graph->Etable.table;        // reading only attributes, so use double *
   double * d_PAttr  = (double *) d_Pattern_Graph->Etable.table;     // reading only attributes, so use double *
 
-  uint64_t thread = 1024;
-  uint64_t block  = 1 + (num_DE * num_PE) / thread;
-  assert(thread * block > num_DE * num_PE);
+  uint64_t block  = 1 + (num_DE * num_PE) / THREAD;
+  assert(THREAD * block > num_DE * num_PE);
 
-  __d_Init_CE_RE_FE<<<block, thread>>>(
+  __d_Init_CE_RE_FE<<<block, THREAD>>>(
     num_AT,
     num_PE,
     d_PAttr,
@@ -341,6 +339,7 @@ void d_Init_CE_RE_FE(Graph * d_Data_Graph, Graph * d_Pattern_Graph,
 
 __global__ void __d_VF_VR(
   uint64_t num_AT,
+  uint64_t num_DV,
   uint64_t num_PE,
   uint64_t num_PV,
   uint64_t * PAttr,
@@ -353,38 +352,195 @@ __global__ void __d_VF_VR(
 {
 
   uint64_t k = threadIdx.x + blockDim.x * blockIdx.x;
+  if(k < num_DV * num_PE) {
+    uint64_t i = k / num_PE;
+    uint64_t j = k % num_PE;
 
-  uint64_t i = k / num_PE;
-  uint64_t j = k % num_PE;
-  uint64_t src = PAttr[j * num_AT];         // src id
-  uint64_t dst = PAttr[j * num_AT + 1];     // dst id
-  VF[k] = MU[i * num_PV + dst] - FMax[k];
-  VR[k] = MU[i * num_PV + src] - RMax[k];
+    uint64_t src = PAttr[j * num_AT];         // src id
+    uint64_t dst = PAttr[j * num_AT + 1];     // dst id
+    VF[k] = MU[i * num_PV + dst] - FMax[k];
+    VR[k] = MU[i * num_PV + src] - RMax[k];
+  }
 }
 
-void d_VF_VR(Graph * Data_Graph, Graph * Pattern_Graph,
-           double * MU, double * FMax, double * RMax, double * VF, double * VR) {
+void d_VF_VR(Graph * d_Data_Graph, Graph * d_Pattern_Graph,
+           double * d_MU, double * d_FMax, double * d_RMax, double * d_VF, double * d_VR) {
 
-  uint64_t num_DV  = Data_Graph->num_vertices;
-  uint64_t num_PV  = Pattern_Graph->num_vertices;
-  uint64_t num_PE  = Pattern_Graph->num_edges;
-  uint64_t num_AT  = Pattern_Graph->Etable.num_cols;
-  uint64_t * PAttr = (uint64_t *) Pattern_Graph->Etable.table;
+  uint64_t num_DV  = d_Data_Graph->num_vertices;
+  uint64_t num_PV  = d_Pattern_Graph->num_vertices;
+  uint64_t num_PE  = d_Pattern_Graph->num_edges;
+  uint64_t num_AT  = d_Pattern_Graph->Etable.num_cols;
+  uint64_t * d_PAttr = (uint64_t *) d_Pattern_Graph->Etable.table;
 
-  uint64_t thread = 1024;
-  uint64_t block  = 1 + (num_DV * num_PE) / thread;
-  assert(thread * block > num_DV * num_PE);
+  uint64_t block  = 1 + (num_DV * num_PE) / THREAD;
+  assert(THREAD * block > num_DV * num_PE);
 
-  __d_VF_VR<<<block, thread>>>(
+  __d_VF_VR<<<block, THREAD>>>(
     num_AT,
+    num_DV,
     num_PE,
     num_PV,
-    PAttr,
-    MU,
-    VR,
-    VF,
-    FMax,
-    RMax
+    d_PAttr,
+    d_MU,
+    d_VR,
+    d_VF,
+    d_FMax,
+    d_RMax
   );
+  cudaDeviceSynchronize();
+}
+
+__global__ void __copyChangeSign(double * d_out, double * d_in, int n) {
+  int i = threadIdx.x + blockDim.x * blockIdx.x;
+  if(i < n) {
+    d_out[i] = -d_in[i];
+  }
+}
+
+__global__ void __tileVector(uint64_t * d_out, uint64_t * d_in,
+  int num_in, int num_out) {
+
+  int i = threadIdx.x + blockDim.x * blockIdx.x;
+  if(i < num_out) {
+    d_out[i] = d_in[i % num_in];
+  }
+}
+
+__global__ void __tileVectorOffset(uint64_t * d_out, uint64_t * d_in,
+    int num_in, int num_uin, int num_out) {
+
+  int i = threadIdx.x + blockDim.x * blockIdx.x;
+  if(i < num_out) {
+    d_out[i] = num_uin * (i / num_in) + d_in[i % num_in];
+  }
+}
+
+__global__ void __vectorAdd(double * d_out, double * d_in, int n) {
+  int i = threadIdx.x + blockDim.x * blockIdx.x;
+  if(i < n) {
+    d_out[i] += d_in[i];
+  }
+}
+
+__global__ void __vectorScatterAdd(double * d_out, uint64_t * d_key_in, double * d_value_in, int * n) {
+  int i = threadIdx.x + blockDim.x * blockIdx.x;
+  if(i < n[0]) {
+    d_out[d_key_in[i]] += d_value_in[i];
+  }
+}
+
+__global__ void __MU(
+  uint64_t num_DV,
+  uint64_t num_PV,
+  uint64_t num_PE,
+  uint64_t num_AT,
+  uint64_t * srcs,
+  uint64_t * dsts,
+  double * FMax,
+  double * RMax,
+  double * MU
+)
+{
+  // Sum reduce columns of FMax/RMax by key
+  // Some of the keys are sequential, some are not
+  uint64_t k = threadIdx.x + blockDim.x * blockIdx.x;
+  if(k < num_DV * num_PE) {
+    uint64_t i = k / num_PE;
+    uint64_t j = k % num_PE;
+    atomicAdd(&MU[i * num_PV + dsts[j]], FMax[k]);
+    atomicAdd(&MU[i * num_PV + srcs[j]], RMax[k]);
+  }
+}
+
+void d_UpdateMU(Graph * d_Data_Graph, Graph * d_Pattern_Graph, double * d_CV,
+  double * d_FMax, double * d_RMax, double * d_MU) {
+
+  uint64_t num_DV = d_Data_Graph->num_vertices;
+  uint64_t num_PV = d_Pattern_Graph->num_vertices;
+  uint64_t num_PE = d_Pattern_Graph->num_edges;
+  uint64_t * d_srcs = d_Pattern_Graph->Etable.srcs;
+  uint64_t * d_dsts = d_Pattern_Graph->Etable.dsts;
+
+  // MU = -CV
+  uint64_t block_vv = 1 + (num_DV * num_PV) / THREAD;
+  assert(THREAD * block_vv > num_DV * num_PV);
+  __copyChangeSign<<<block_vv, THREAD>>>(d_MU, d_CV, num_DV * num_PV);
+
+  // Sum reduce
+  uint64_t block_ve = 1 + (num_DV * num_PE) / THREAD;
+  assert(THREAD * block_ve > num_DV * num_PE);
+
+  // --------------------------------------------
+  // Reduce over `src`
+
+  uint64_t *d_tiled_srcs;
+  cudaMalloc((void**)&d_tiled_srcs, num_DV * num_PE * sizeof(uint64_t));
+  cudaMemset(d_tiled_srcs, 0, num_DV * num_PE * sizeof(uint64_t));
+  __tileVector<<<block_ve, THREAD>>>(d_tiled_srcs, d_srcs, num_PE, num_DV * num_PE);
+
+  int num_items = num_DV * num_PE;
+  uint64_t *d_keys_in;
+  uint64_t *d_keys_out;
+  double   *d_values_in;
+  double   *d_values_out;
+  int *d_num_runs_out;
+
+  cudaMalloc((void**)&d_keys_in,        num_DV * num_PE * sizeof(uint64_t));
+  cudaMalloc((void**)&d_keys_out,       num_DV * num_PV * sizeof(uint64_t));
+  cudaMalloc((void**)&d_values_in,      num_DV * num_PE * sizeof(double));
+  cudaMalloc((void**)&d_values_out,     num_DV * num_PV * sizeof(double));
+  cudaMalloc((void**)&d_num_runs_out,   1 * sizeof(int));
+
+  cudaMemcpy(d_keys_in,   d_tiled_srcs, num_DV * num_PE * sizeof(uint64_t), cudaMemcpyDeviceToDevice);
+  cudaMemcpy(d_values_in, d_RMax,       num_DV * num_PE * sizeof(double), cudaMemcpyDeviceToDevice);
+
+  void     *d_temp_storage = NULL;
+  size_t   temp_storage_bytes = 0;
+  cub::DeviceReduce::ReduceByKey(d_temp_storage, temp_storage_bytes,
+    d_keys_in, d_keys_out, d_values_in, d_values_out, d_num_runs_out, cub::Sum(), num_items);
+  cudaMalloc(&d_temp_storage, temp_storage_bytes);
+  cub::DeviceReduce::ReduceByKey(d_temp_storage, temp_storage_bytes,
+    d_keys_in, d_keys_out, d_values_in, d_values_out, d_num_runs_out, cub::Sum(), num_items);
+
+  __vectorAdd<<<block_vv, THREAD>>>(d_MU, d_values_out, num_DV * num_PV);
+
+  // --------------------------------------------
+  // Reduce over `dst`
+
+  uint64_t *d_tiled_dsts;
+  cudaMalloc((void**)&d_tiled_dsts, num_DV * num_PE * sizeof(uint64_t));
+  cudaMemset(d_tiled_dsts, 0, num_DV * num_PE * sizeof(uint64_t));
+  __tileVectorOffset<<<block_ve, THREAD>>>(d_tiled_dsts, d_dsts, num_PE, num_PV, num_DV * num_PE);
+
+  uint64_t *d_keys_tmp;
+  double *d_values_tmp;
+  cudaMalloc((void**)&d_keys_tmp,   num_DV * num_PE * sizeof(uint64_t));
+  cudaMalloc((void**)&d_values_tmp, num_DV * num_PE * sizeof(double));
+
+  cudaMemcpy(d_keys_in,   d_tiled_dsts, num_DV * num_PE * sizeof(uint64_t), cudaMemcpyDeviceToDevice);
+  cudaMemcpy(d_values_in, d_FMax,       num_DV * num_PE * sizeof(double), cudaMemcpyDeviceToDevice);
+
+  cudaMemset(d_keys_out,   0, num_DV * num_PV * sizeof(uint64_t));
+  cudaMemset(d_values_out, 0, num_DV * num_PV * sizeof(double));
+
+  d_temp_storage = NULL;
+  temp_storage_bytes = 0;
+  cub::DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes,
+      d_keys_in, d_keys_tmp, d_values_in, d_values_tmp, num_items);
+  cudaMalloc(&d_temp_storage, temp_storage_bytes);
+  cub::DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes,
+      d_keys_in, d_keys_tmp, d_values_in, d_values_tmp, num_items);
+
+  d_temp_storage = NULL;
+  temp_storage_bytes = 0;
+  cub::DeviceReduce::ReduceByKey(d_temp_storage, temp_storage_bytes,
+    d_keys_tmp, d_keys_out, d_values_tmp, d_values_out, d_num_runs_out, cub::Sum(), num_items);
+  cudaMalloc(&d_temp_storage, temp_storage_bytes);
+  cub::DeviceReduce::ReduceByKey(d_temp_storage, temp_storage_bytes,
+    d_keys_tmp, d_keys_out, d_values_tmp, d_values_out, d_num_runs_out, cub::Sum(), num_items);
+
+  // Add to d_MU
+  __vectorScatterAdd<<<block_vv, THREAD>>>(d_MU, d_keys_out, d_values_out, d_num_runs_out);
+
   cudaDeviceSynchronize();
 }

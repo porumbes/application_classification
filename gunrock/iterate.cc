@@ -1,3 +1,4 @@
+#include <iostream>
 #include "main.h"
 #include "kernels.cuh"
 
@@ -61,12 +62,12 @@ void VF_VR(Graph * Data_Graph, Graph * Pattern_Graph,
 
 // #pragma omp parallel for
   for (uint64_t k = 0; k < num_DV * num_PE; k ++) {
-      uint64_t i = k / num_PE;
-      uint64_t j = k % num_PE;
-      uint64_t src = PAttr[j * num_AT];         // src id
-      uint64_t dst = PAttr[j * num_AT + 1];     // dst id
-      VF[k] = MU[i * num_PV + dst] - FMax[k];
-      VR[k] = MU[i * num_PV + src] - RMax[k];
+    uint64_t i = k / num_PE;
+    uint64_t j = k % num_PE;
+    uint64_t src = PAttr[j * num_AT];
+    uint64_t dst = PAttr[j * num_AT + 1];
+    VF[k] = MU[i * num_PV + dst] - FMax[k];
+    VR[k] = MU[i * num_PV + src] - RMax[k];
 } }
 
 
@@ -160,33 +161,42 @@ void MU(Graph * Data_Graph, Graph * Pattern_Graph, double * CV, double * FMax, d
 
 // #pragma omp parallel for
   for (uint64_t k = 0; k < num_DV * num_PE; k ++) {
-          uint64_t i   = k / num_PE;
-          uint64_t j   = k % num_PE;
-          uint64_t src = PAttr[j * num_AT];         // src id
-          uint64_t dst = PAttr[j * num_AT + 1];     // dst id
-          // #pragma omp atomic
-          MU[i * num_PV + dst] += FMax[k];
-          // #pragma omp atomic
-          MU[i * num_PV + src] += RMax[k];
+    uint64_t i   = k / num_PE;
+    uint64_t j   = k % num_PE;
+    uint64_t src = PAttr[j * num_AT];
+    uint64_t dst = PAttr[j * num_AT + 1];
+    MU[i * num_PV + dst] += FMax[k];
+    MU[i * num_PV + src] += RMax[k];
 } }
 
 
-void run_iteration(Graph* h_Data_Graph, Graph* h_Pattern_Graph, WorkArrays& h_WA, WorkArrays& d_WA) {
+void run_iteration(
+  Graph* h_Data_Graph, Graph* h_Pattern_Graph,
+  Graph* d_Data_Graph, Graph* d_Pattern_Graph,
+  WorkArrays& h_WA, WorkArrays& d_WA) {
 
   int DV = h_Data_Graph->num_vertices;
   int DE = h_Data_Graph->num_edges;
   int PV = h_Pattern_Graph->num_vertices;
   int PE = h_Pattern_Graph->num_edges;
 
+  d_VF_VR(d_Data_Graph, d_Pattern_Graph, d_WA.MU, d_WA.FMax, d_WA.RMax, d_WA.VF, d_WA.VR);
+  d_VFmax_VRmax(d_Data_Graph, d_Pattern_Graph, d_WA.VF, d_WA.VR, d_WA.VFmax, d_WA.VRmax);
   device2host(h_WA, d_WA, DV, DE, PV, PE);
-    VF_VR(h_Data_Graph, h_Pattern_Graph, h_WA.MU, h_WA.FMax, h_WA.RMax, h_WA.VF, h_WA.VR);
-    VFmax_VRmax(h_Data_Graph, h_Pattern_Graph, h_WA.VF, h_WA.VR, h_WA.VFmax, h_WA.VRmax);
     FE_RE(h_Data_Graph, h_Pattern_Graph, h_WA.CE, h_WA.VF, h_WA.VR, h_WA.FE, h_WA.RE);
-    NormProb(DE, PE, h_WA.FE);
-    NormProb(DE, PE, h_WA.RE);
+  host2device(h_WA, d_WA, DV, DE, PV, PE);
+
+  d_NormProb(DE, PE, d_WA.FE);
+  d_NormProb(DE, PE, d_WA.RE);
+
+  device2host(h_WA, d_WA, DV, DE, PV, PE);
     FMax(h_Data_Graph, h_Pattern_Graph, h_WA.Cnull, h_WA.VRmax, h_WA.FE, h_WA.FMax);
     RMax(h_Data_Graph, h_Pattern_Graph, h_WA.Cnull, h_WA.VFmax, h_WA.RE, h_WA.RMax);
-    MU(h_Data_Graph, h_Pattern_Graph, h_WA.CV, h_WA.FMax, h_WA.RMax, h_WA.MU);
-    NormProb(DV, PV, h_WA.MU);
+  host2device(h_WA, d_WA, DV, DE, PV, PE);
+
+  d_UpdateMU(d_Data_Graph, d_Pattern_Graph, d_WA.CV, d_WA.FMax, d_WA.RMax, d_WA.MU);
+  d_NormProb(DV, PV, d_WA.MU);
+
+  device2host(h_WA, d_WA, DV, DE, PV, PE);
   host2device(h_WA, d_WA, DV, DE, PV, PE);
 }
