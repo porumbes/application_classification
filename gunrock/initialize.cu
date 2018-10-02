@@ -107,13 +107,15 @@ void Init_CV_MU(Graph * Data_Graph, Graph * Pattern_Graph, double * CV, double *
 // } }
 
 
-void initializeWorkArrays(Graph * Data_Graph, Graph * Pattern_Graph,
+void initializeWorkArrays(
+  Graph * h_Data_Graph, Graph * h_Pattern_Graph,
+  Graph * d_Data_Graph, Graph * d_Pattern_Graph,
   WorkArrays &h_WA, WorkArrays &d_WA) {
 
-  const uint64_t DV = Data_Graph->num_vertices;
-  const uint64_t DE = Data_Graph->num_edges;
-  const uint64_t PV = Pattern_Graph->num_vertices;
-  const uint64_t PE = Pattern_Graph->num_edges;
+  const uint64_t DV = h_Data_Graph->num_vertices;
+  const uint64_t DE = h_Data_Graph->num_edges;
+  const uint64_t PV = h_Pattern_Graph->num_vertices;
+  const uint64_t PE = h_Pattern_Graph->num_edges;
 
   // CPU allocation
   h_WA.CV       = (double *) malloc(DV * PV * sizeof(double));
@@ -143,27 +145,29 @@ void initializeWorkArrays(Graph * Data_Graph, Graph * Pattern_Graph,
   cudaMalloc((void **)&d_WA.RMax,  DV * PE * sizeof(double));
   cudaMalloc((void **)&d_WA.FMax,  DV * PE * sizeof(double));
 
-  error: need to copy `data_graph` and `pattern_graph` to GPU
+// look_here
+  // error: need to copy `data_graph` and `pattern_graph` to GPU
+  // also, need to be careful about `uint64_t` stuff.
 
   // Pairwise distances
   device2host(h_WA, d_WA, DV, DE, PV, PE);
-    Init_CV_MU(Data_Graph, Pattern_Graph, h_WA.CV, h_WA.MU);
+    Init_CV_MU(h_Data_Graph, h_Pattern_Graph, h_WA.CV, h_WA.MU);
   host2device(h_WA, d_WA, DV, DE, PV, PE);
 
   d_NormProb(DV, PV, d_WA.CV);
   d_NormProb(DV, PV, d_WA.MU);
-  d_Init_VR_VF(Data_Graph, Pattern_Graph, d_WA.MU, d_WA.VR, d_WA.VF);
-  // d_Init_CE_RE_FE(Data_Graph, Pattern_Graph, h_WA.CE, h_WA.RE, h_WA.FE);
-  // d_NormProb(DE, PE, d_WA.CE);
-  // d_NormProb(DE, PE, d_WA.RE);
-  // d_NormProb(DE, PE, d_WA.FE);
-  // cudaMemset(d_WA.Cnull, 0, PE * sizeof(double));
-  // d_VFmax_VRmax(Data_Graph, Pattern_Graph, d_WA.VF, d_WA.VR, d_WA.VFmax, d_WA.VRmax);
+  d_Init_VR_VF(d_Data_Graph, d_Pattern_Graph, d_WA.MU, d_WA.VR, d_WA.VF);
+  d_Init_CE_RE_FE(d_Data_Graph, d_Pattern_Graph, d_WA.CE, d_WA.RE, d_WA.FE);
+  d_NormProb(DE, PE, d_WA.CE);
+  d_NormProb(DE, PE, d_WA.RE);
+  d_NormProb(DE, PE, d_WA.FE);
+  cudaMemset(d_WA.Cnull, 0, PE * sizeof(double));
+  d_VFmax_VRmax(d_Data_Graph, d_Pattern_Graph, d_WA.VF, d_WA.VR, d_WA.VFmax, d_WA.VRmax);
 
-  // device2host(h_WA, d_WA, DV, DE, PV, PE);
-  //   FMax(Data_Graph, Pattern_Graph, h_WA.Cnull, h_WA.VRmax, h_WA.FE, h_WA.FMax);
-  //   RMax(Data_Graph, Pattern_Graph, h_WA.Cnull, h_WA.VFmax, h_WA.RE, h_WA.RMax);
-  // host2device(h_WA, d_WA, DV, DE, PV, PE);
+  device2host(h_WA, d_WA, DV, DE, PV, PE);
+    FMax(h_Data_Graph, h_Pattern_Graph, h_WA.Cnull, h_WA.VRmax, h_WA.FE, h_WA.FMax);
+    RMax(h_Data_Graph, h_Pattern_Graph, h_WA.Cnull, h_WA.VFmax, h_WA.RE, h_WA.RMax);
+  host2device(h_WA, d_WA, DV, DE, PV, PE);
 
   device2host(h_WA, d_WA, DV, DE, PV, PE);
 }

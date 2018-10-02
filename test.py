@@ -62,82 +62,79 @@ def l2_norm(x):
 
 cv = cdist(data_vertex, pattern_vertex)  # num_dv x num_pv
 
-cv_max = cv.max()
-print(cv_max)
+mu = normprob(-cv) # num_dv x num_pv
+cv = normprob(cv)  # num_dv x num_pv
 
-# mu = normprob(-cv) # num_dv x num_pv
-# cv = normprob(cv)  # num_dv x num_pv
+v_fwd_max = np.zeros(num_pe) # num_dv x num_pe
+v_bak_max = np.zeros(num_pe) # num_dv x num_pe
+mu_max = mu.max(axis=0)
 
-# v_fwd_max = np.zeros(num_pe) # num_dv x num_pe
-# v_bak_max = np.zeros(num_pe) # num_dv x num_pe
-# mu_max = mu.max(axis=0)
+for i, (src, dst) in enumerate(pattern_edges):
+    v_bak_max[i] = mu_max[src]
+    v_fwd_max[i] = mu_max[dst]
 
-# for i, (src, dst) in enumerate(pattern_edges):
-#     v_bak_max[i] = mu_max[src]
-#     v_fwd_max[i] = mu_max[dst]
+# --
+# Edge similarity
 
-# # --
-# # Edge similarity
+ce = cdist(data_edges_table, pattern_edges_table) # num_de x num_pe
+xe = normprob(-ce) # num_de x num_pe
+ce = normprob(ce)  # num_de x num_pe
 
-# ce = cdist(data_edges_table, pattern_edges_table) # num_de x num_pe
-# xe = normprob(-ce) # num_de x num_pe
-# ce = normprob(ce)  # num_de x num_pe
+# --
+# Combine
 
-# # --
-# # Combine
+# >>
+# cnull = np.sqrt((pattern_edges_table ** 2).sum(axis=-1))
+# cnull = np.maximum(cnull, ce.max(axis=0))
+# cnull = normprob(cnull)
+# --
+cnull = np.zeros(num_pe) # bug in code?
+# <<
 
-# # >>
-# # cnull = np.sqrt((pattern_edges_table ** 2).sum(axis=-1))
-# # cnull = np.maximum(cnull, ce.max(axis=0))
-# # cnull = normprob(cnull)
-# # --
-# cnull = np.zeros(num_pe) # bug in code?
-# # <<
+fwd_max = np.zeros((num_dv, num_pe))
+bak_max = np.zeros((num_dv, num_pe))
 
-# fwd_max = np.zeros((num_dv, num_pe))
-# bak_max = np.zeros((num_dv, num_pe))
-
-# fwd_touched = set([])
-# bak_touched = set([])
-# for edge_idx, (src, dst) in enumerate(data_edges):
-#     if dst not in fwd_touched:
-#         fwd_max[dst] = np.maximum(v_bak_max, xe[edge_idx])
-#         fwd_touched.add(dst)
-#     else:
-#         fwd_max[dst] = np.maximum(fwd_max[dst], xe[edge_idx])
+fwd_touched = set([])
+bak_touched = set([])
+for edge_idx, (src, dst) in enumerate(data_edges):
+    if dst not in fwd_touched:
+        fwd_max[dst] = np.maximum(v_bak_max, xe[edge_idx])
+        fwd_touched.add(dst)
+    else:
+        fwd_max[dst] = np.maximum(fwd_max[dst], xe[edge_idx])
     
-#     if src not in bak_touched:
-#         bak_max[src] = np.maximum(v_fwd_max, xe[edge_idx])
-#         bak_touched.add(src)
-#     else:
-#         bak_max[src] = np.maximum(bak_max[src], xe[edge_idx])
+    if src not in bak_touched:
+        bak_max[src] = np.maximum(v_fwd_max, xe[edge_idx])
+        bak_touched.add(src)
+    else:
+        bak_max[src] = np.maximum(bak_max[src], xe[edge_idx])
 
 
-# v_fwd = np.zeros((num_dv, num_pe)) # num_dv x num_pe
-# v_bak = np.zeros((num_dv, num_pe)) # num_dv x num_pe
-# for _ in range(num_pv):
+v_fwd = np.zeros((num_dv, num_pe)) # num_dv x num_pe
+v_bak = np.zeros((num_dv, num_pe)) # num_dv x num_pe
+for _ in range(num_pv):
     
-#     for p_edge_idx, (src, dst) in enumerate(pattern_edges):
-#         v_fwd[:,p_edge_idx] = mu[:,dst] - fwd_max[:,p_edge_idx]
-#         v_bak[:,p_edge_idx] = mu[:,src] - bak_max[:,p_edge_idx]
+    for p_edge_idx, (src, dst) in enumerate(pattern_edges):
+        v_fwd[:,p_edge_idx] = mu[:,dst] - fwd_max[:,p_edge_idx]
+        v_bak[:,p_edge_idx] = mu[:,src] - bak_max[:,p_edge_idx]
     
-#     e_bak = normprob(v_fwd[data_edges[:,0]] - ce)
-#     e_fwd = normprob(v_bak[data_edges[:,0]] - ce)
+    e_bak = normprob(v_fwd[data_edges[:,0]] - ce)
+    e_fwd = normprob(v_bak[data_edges[:,0]] - ce)
     
-#     v_fwd_max = v_fwd.max(axis=0)
-#     v_bak_max = v_bak.max(axis=0)
+    v_fwd_max = v_fwd.max(axis=0)
+    v_bak_max = v_bak.max(axis=0)
     
-#     fwd_max = np.tile(v_bak_max - cnull, num_dv).reshape(num_dv, -1) # num_pv x num_pe
-#     bak_max = np.tile(v_fwd_max - cnull, num_dv).reshape(num_dv, -1) # num_pv x num_pe
-#     for d_edge_idx, (src, dst) in enumerate(data_edges):
-#         fwd_max[dst] = np.maximum(fwd_max[dst], e_fwd[d_edge_idx])
-#         bak_max[src] = np.maximum(bak_max[src], e_bak[d_edge_idx])
+    fwd_max = np.tile(v_bak_max - cnull, num_dv).reshape(num_dv, -1) # num_pv x num_pe
+    bak_max = np.tile(v_fwd_max - cnull, num_dv).reshape(num_dv, -1) # num_pv x num_pe
+    for d_edge_idx, (src, dst) in enumerate(data_edges):
+        fwd_max[dst] = np.maximum(fwd_max[dst], e_fwd[d_edge_idx])
+        bak_max[src] = np.maximum(bak_max[src], e_bak[d_edge_idx])
     
-#     mu = -cv
-#     for p_edge_idx, (src, dst) in enumerate(pattern_edges):
-#         mu[:,dst] += fwd_max[:,p_edge_idx]
-#         mu[:,src] += bak_max[:,p_edge_idx]
+    mu = -cv
+    for p_edge_idx, (src, dst) in enumerate(pattern_edges):
+        mu[:,dst] += fwd_max[:,p_edge_idx]
+        mu[:,src] += bak_max[:,p_edge_idx]
     
-#     mu = normprob(mu)
+    mu = normprob(mu)
 
-# np.savetxt('python_result', np.hstack(mu))
+np.savetxt('python_result', np.hstack(mu))

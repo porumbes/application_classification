@@ -171,22 +171,22 @@ void MU(Graph * Data_Graph, Graph * Pattern_Graph, double * CV, double * FMax, d
 } }
 
 
-void run_iteration(Graph* Data_Graph, Graph* Pattern_Graph, WorkArrays& h_WA, WorkArrays& d_WA) {
+void run_iteration(Graph* h_Data_Graph, Graph* h_Pattern_Graph, WorkArrays& h_WA, WorkArrays& d_WA) {
 
-  int DV = Data_Graph->num_vertices;
-  int DE = Data_Graph->num_edges;
-  int PV = Pattern_Graph->num_vertices;
-  int PE = Pattern_Graph->num_edges;
+  int DV = h_Data_Graph->num_vertices;
+  int DE = h_Data_Graph->num_edges;
+  int PV = h_Pattern_Graph->num_vertices;
+  int PE = h_Pattern_Graph->num_edges;
 
   device2host(h_WA, d_WA, DV, DE, PV, PE);
-    VF_VR(Data_Graph, Pattern_Graph, h_WA.MU, h_WA.FMax, h_WA.RMax, h_WA.VF, h_WA.VR);
-    VFmax_VRmax(Data_Graph, Pattern_Graph, h_WA.VF, h_WA.VR, h_WA.VFmax, h_WA.VRmax);
-    FE_RE(Data_Graph, Pattern_Graph, h_WA.CE, h_WA.VF, h_WA.VR, h_WA.FE, h_WA.RE);
+    VF_VR(h_Data_Graph, h_Pattern_Graph, h_WA.MU, h_WA.FMax, h_WA.RMax, h_WA.VF, h_WA.VR);
+    VFmax_VRmax(h_Data_Graph, h_Pattern_Graph, h_WA.VF, h_WA.VR, h_WA.VFmax, h_WA.VRmax);
+    FE_RE(h_Data_Graph, h_Pattern_Graph, h_WA.CE, h_WA.VF, h_WA.VR, h_WA.FE, h_WA.RE);
     NormProb(DE, PE, h_WA.FE);
     NormProb(DE, PE, h_WA.RE);
-    FMax(Data_Graph, Pattern_Graph, h_WA.Cnull, h_WA.VRmax, h_WA.FE, h_WA.FMax);
-    RMax(Data_Graph, Pattern_Graph, h_WA.Cnull, h_WA.VFmax, h_WA.RE, h_WA.RMax);
-    MU(Data_Graph, Pattern_Graph, h_WA.CV, h_WA.FMax, h_WA.RMax, h_WA.MU);
+    FMax(h_Data_Graph, h_Pattern_Graph, h_WA.Cnull, h_WA.VRmax, h_WA.FE, h_WA.FMax);
+    RMax(h_Data_Graph, h_Pattern_Graph, h_WA.Cnull, h_WA.VFmax, h_WA.RE, h_WA.RMax);
+    MU(h_Data_Graph, h_Pattern_Graph, h_WA.CV, h_WA.FMax, h_WA.RMax, h_WA.MU);
     NormProb(DV, PV, h_WA.MU);
   host2device(h_WA, d_WA, DV, DE, PV, PE);
 }

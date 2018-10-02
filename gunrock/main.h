@@ -46,7 +46,7 @@ void NormProb(uint64_t, uint64_t, double *);
 Table readEdgeTable(char *);
 Table readVertexTable(char *);
 Graph constructGraph(Table *, Table *);
-void initializeWorkArrays(Graph *, Graph *, WorkArrays&, WorkArrays&);
+void initializeWorkArrays(Graph *, Graph *, Graph *, Graph *, WorkArrays&, WorkArrays&);
 
 void VF_VR(Graph *, Graph *, double *, double *, double *, double *, double *);
 void VFmax_VRmax(Graph *, Graph *, double *, double *, double *, double *);
