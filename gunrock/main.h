@@ -1,3 +1,5 @@
+#ifndef __MAIN_H
+#define __MAIN_H
 
 #include <stdio.h>
 #include <stdint.h>
@@ -44,7 +46,7 @@ void NormProb(uint64_t, uint64_t, double *);
 Table readEdgeTable(char *);
 Table readVertexTable(char *);
 Graph constructGraph(Table *, Table *);
-WorkArrays initializeWorkArrays(Graph *, Graph *);
+void initializeWorkArrays(Graph *, Graph *, WorkArrays&, WorkArrays&);
 
 void VF_VR(Graph *, Graph *, double *, double *, double *, double *, double *);
 void VFmax_VRmax(Graph *, Graph *, double *, double *, double *, double *);
@@ -52,3 +54,7 @@ void FE_RE(Graph *, Graph *, double *, double *, double *, double *, double *);
 void FMax(Graph *, Graph *, double *, double *, double *, double *);
 void RMax(Graph *, Graph *, double *, double *, double *, double *);
 void MU(Graph *, Graph *, double *, double *, double *, double *);
+
+void run_iteration(Graph *, Graph *, WorkArrays&, WorkArrays&);
+
+#endif

@@ -2,9 +2,9 @@
 
 Graph constructGraph(Table * Vtable, Table * Etable) {
   Graph graph;
-  graph.Vtable = * Vtable;
-  graph.Etable = * Etable;
-  graph.num_edges = Etable->num_rows;
+  graph.Vtable       = * Vtable;
+  graph.Etable       = * Etable;
+  graph.num_edges    = Etable->num_rows;
   graph.num_vertices = Vtable->num_rows;
   graph.starts = (uint64_t *) malloc((graph.num_vertices + 1) * sizeof(uint64_t));
 
@@ -14,7 +14,7 @@ Graph constructGraph(Table * Vtable, Table * Etable) {
 
 // for each edge i whose src id is different than the src id of the previous edge
 //     edge list of vertices [prev_src + 1 .. this_src] start at i
-#pragma omp parallel for
+// #pragma omp parallel for
   for (uint64_t i = 1; i < graph.num_edges; i ++) {
       uint64_t this_src = Etable->table[i * Etable->num_cols];
       uint64_t prev_src = Etable->table[(i - 1) * Etable->num_cols];

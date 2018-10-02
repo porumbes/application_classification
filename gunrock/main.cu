@@ -1,6 +1,13 @@
+#ifndef __MAIN_CU
+#define __MAIN_CU
+
+#include <iostream>
 #include "main.h"
 
 int main ( int argc, char * argv[] ) {
+
+  // --
+  // IO
 
   Table Data_Vtable    = readVertexTable(argv[2]);
   Table Data_Etable    = readEdgeTable(argv[3]);
@@ -10,32 +17,29 @@ int main ( int argc, char * argv[] ) {
   Graph Data_Graph    = constructGraph(& Data_Vtable, & Data_Etable);
   Graph Pattern_Graph = constructGraph(& Pattern_Vtable, & Pattern_Etable);
 
-  WorkArrays WA = initializeWorkArrays(& Data_Graph, & Pattern_Graph);
+  // --
+  // Init
+  WorkArrays h_WA;
+  WorkArrays d_WA;
+  initializeWorkArrays(&Data_Graph, &Pattern_Graph, h_WA, d_WA);
+
+  // --
+  // Run
 
   uint64_t DV = Data_Graph.num_vertices;
-  uint64_t DE = Data_Graph.num_edges;
   uint64_t PV = Pattern_Graph.num_vertices;
-  uint64_t PE = Pattern_Graph.num_edges;
 
-  for (uint64_t iter = 0; iter < PV; iter ++) {
-      VF_VR(& Data_Graph, & Pattern_Graph, WA.MU, WA.FMax, WA.RMax, WA.VF, WA.VR);
+  // for (uint64_t iter = 0; iter < PV; iter ++) {
+  //     run_iteration(&Data_Graph, &Pattern_Graph, h_WA, d_WA);
+  // }
 
-      VFmax_VRmax(& Data_Graph, & Pattern_Graph, WA.VF, WA.VR, WA.VFmax, WA.VRmax);
-
-      FE_RE(& Data_Graph, & Pattern_Graph, WA.CE, WA.VF, WA.VR, WA.FE, WA.RE);
-      NormProb(DE, PE, WA.FE);
-      NormProb(DE, PE, WA.RE);
-
-      FMax(& Data_Graph, & Pattern_Graph, WA.Cnull, WA.VRmax, WA.FE, WA.FMax);
-
-      RMax(& Data_Graph, & Pattern_Graph, WA.Cnull, WA.VFmax, WA.RE, WA.RMax);
-
-      MU(& Data_Graph, & Pattern_Graph, WA.CV, WA.FMax, WA.RMax, WA.MU);
-      NormProb(DV, PV, WA.MU);
-  }
+  // --
+  // Print results
 
   for (uint64_t i = 0; i < DV * PV; i ++) {
-    printf("%e\n", WA.MU[i]);
+    printf("%e\n", h_WA.MU[i]);
   }
   return 0;
 }
+
+#endif
