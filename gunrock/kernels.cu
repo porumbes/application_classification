@@ -8,6 +8,42 @@
 namespace ac {
 
 // --
+// Helpers
+
+void sort_edges(IntT* srcs, IntT* dsts, IntT* srcs_r, IntT* dsts_r, IntT* map_r, IntT num_edges) {
+  void *d_temp_storage = NULL;
+  size_t temp_storage_bytes = 0;
+
+  // Copy edgelist to be sorted by dst
+  cub::DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes,
+      dsts, dsts_r, srcs, srcs_r, num_edges);
+  cudaMalloc(&d_temp_storage, temp_storage_bytes);
+  cub::DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes,
+      dsts, dsts_r, srcs, srcs_r, num_edges);
+
+  // Map between two edgelist orders
+  IntT* h_map = (IntT*)malloc(num_edges * sizeof(IntT));
+  for(IntT i = 0; i < num_edges; i++) {
+    h_map[i] = (IntT)i;
+  }
+
+  IntT* map;
+  cudaMalloc((void**)&map, num_edges * sizeof(IntT));
+  cudaMemcpy(map, h_map, num_edges * sizeof(IntT), cudaMemcpyHostToDevice);
+
+  d_temp_storage = NULL;
+  temp_storage_bytes = 0;
+  cub::DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes,
+      dsts, dsts_r, map, map_r, num_edges);
+  cudaMalloc(&d_temp_storage, temp_storage_bytes);
+  cub::DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes,
+      dsts, dsts_r, map, map_r, num_edges);
+
+  free(h_map);
+  cudaFree(map);
+}
+
+// --
 // Kernels
 
 // __global__ FloatT norm_1(int ATtr, FloatT * vec1) {
@@ -35,6 +71,31 @@ __global__ void __transpose(FloatT *d_xt, FloatT *d_x, IntT num_rows, IntT num_c
   }
 }
 
+__global__ void __fillLow(FloatT *d_x, IntT n) {
+  IntT offset = threadIdx.x + blockDim.x * blockIdx.x;
+  if(offset < n) {
+    d_x[offset] = -DBL_MAX;
+  }
+}
+
+__global__ void __transposeWithKey(FloatT *d_xt, FloatT *d_x, IntT *d_idx, IntT* num_entries, IntT num_rows, IntT num_cols) {
+  IntT offset = threadIdx.x + blockDim.x * blockIdx.x;
+  // Fill entries
+  if(offset < num_entries[0]) {
+    IntT offset_t = d_idx[offset];
+    IntT row  = offset_t / num_cols;
+    IntT col  = offset_t % num_cols;
+    d_xt[col * num_rows + row] = d_x[offset];
+  }
+}
+
+__global__ void __tileMax(FloatT * d_out, FloatT * d_in, IntT num_in, IntT num_out) {
+  IntT i = threadIdx.x + blockDim.x * blockIdx.x;
+  if(i < num_out) {
+    d_out[i] = max(d_out[i], d_in[i % num_in]);
+  }
+}
+
 __global__ void __rowSubExp(FloatT* d_x, IntT num_rows, IntT num_cols, FloatT* c) {
   IntT offset = threadIdx.x + blockDim.x * blockIdx.x;
   if(offset < num_rows * num_cols) {
@@ -57,7 +118,7 @@ void rowmax(FloatT * d_out, FloatT * d_in, IntT num_rows, IntT num_cols) {
   size_t temp_storage_bytes = 0;
 
   // Compute offsets of matrix
-  IntT h_offsets[num_rows + 1];
+  IntT *h_offsets = (IntT*)malloc((num_rows + 1) * sizeof(IntT));
   IntT *d_offsets;
   for(IntT i = 0; i < num_rows + 1; i++) {
     h_offsets[i] = i * num_cols;
@@ -95,7 +156,7 @@ void rowsum(FloatT * d_out, FloatT * d_in, IntT num_rows, IntT num_cols) {
   size_t temp_storage_bytes = 0;
 
   // Compute offsets of matrix
-  IntT h_offsets[num_rows + 1];
+  IntT *h_offsets = (IntT*)malloc((num_rows + 1) * sizeof(IntT));
   IntT *d_offsets;
   for(IntT i = 0; i < num_rows + 1; i++) {
     h_offsets[i] = i * num_cols;
@@ -360,8 +421,7 @@ __global__ void __SubRepeatColumnsByEdges(
   }
 }
 
-void VF_VR(Graph * patt, IntT DV,
-           FloatT * d_MU, FloatT * d_FMax, FloatT * d_RMax, FloatT * d_VF, FloatT * d_VR) {
+void VF_VR(Graph * patt, IntT DV, FloatT * d_MU, FloatT * d_FMax, FloatT * d_RMax, FloatT * d_VF, FloatT * d_VR) {
 
   IntT PV = patt->num_nodes;
   IntT PE = patt->num_edges;
@@ -394,17 +454,17 @@ __global__ void __tileVector(IntT * d_out, IntT * d_in, IntT num_in, IntT num_ou
     d_out[i] = d_in[i % num_in];
 }
 
-__global__ void __tileVectorOffset(IntT * d_out, IntT * d_in, IntT num_in, IntT num_uin, IntT num_out) {
+__global__ void __tileVectorWithOffset(IntT * d_out, IntT * d_in, IntT num_in, IntT num_uin, IntT num_out) {
   IntT i = threadIdx.x + blockDim.x * blockIdx.x;
   if(i < num_out)
     d_out[i] = num_uin * (i / num_in) + d_in[i % num_in];
 }
 
-__global__ void __vectorAdd(FloatT * d_out, FloatT * d_in, IntT num_out) {
-  IntT i = threadIdx.x + blockDim.x * blockIdx.x;
-  if(i < num_out)
-    d_out[i] += d_in[i];
-}
+// __global__ void __vectorAdd(FloatT * d_out, FloatT * d_in, IntT num_out) {
+//   IntT i = threadIdx.x + blockDim.x * blockIdx.x;
+//   if(i < num_out)
+//     d_out[i] += d_in[i];
+// }
 
 __global__ void __vectorScatterAdd(FloatT * d_out, IntT * d_key_in, FloatT * d_value_in, IntT * n) {
   IntT i = threadIdx.x + blockDim.x * blockIdx.x;
@@ -412,11 +472,15 @@ __global__ void __vectorScatterAdd(FloatT * d_out, IntT * d_key_in, FloatT * d_v
     d_out[d_key_in[i]] += d_value_in[i];
 }
 
-__global__ void __tileMax(FloatT * d_out, FloatT * d_in, IntT num_in, IntT num_out) {
+__global__ void __reorderEdges(FloatT* d_out, FloatT* d_in, IntT* d_map_r, IntT num_in, IntT num_out) {
   IntT i = threadIdx.x + blockDim.x * blockIdx.x;
-  if(i < num_out)
-    d_out[i] = max(d_out[i], d_in[i % num_in]);
+  if(i < num_out) {
+    IntT col = i % num_in;
+    IntT row = i / num_in;
+    d_out[i] = d_in[row * num_in + d_map_r[col]];
+  }
 }
+
 
 void UpdateMU(Graph * patt, IntT DV, FloatT * d_CV, FloatT * d_FMax, FloatT * d_RMax, FloatT * d_MU) {
   void     *d_temp_storage = NULL;
@@ -435,87 +499,69 @@ void UpdateMU(Graph * patt, IntT DV, FloatT * d_CV, FloatT * d_FMax, FloatT * d_
   // --------------------------------------------
   // Tile srcs
 
-  IntT *d_tiled_srcs;
-  cudaMalloc((void**)&d_tiled_srcs, DV * PE * sizeof(IntT));
+  IntT *d_tiled_nodes;
+  cudaMalloc((void**)&d_tiled_nodes, DV * PE * sizeof(IntT));
 
   IntT block_dv_pe = 1 + (DV * PE) / THREAD;
   assert(THREAD * block_dv_pe > DV * PE);
-  __tileVector<<<block_dv_pe, THREAD>>>(d_tiled_srcs, patt->srcs, PE, DV * PE);
+  __tileVectorWithOffset<<<block_dv_pe, THREAD>>>(d_tiled_nodes, patt->srcs, PE, PV, DV * PE);
 
   // --------------------------------------------
   // Sum over rows of matrix
 
-  IntT num_items = DV * PE;
-  IntT *d_keys_out;
-  FloatT   *d_values_out;
-  IntT *d_num_runs_out;
+  IntT   *d_keys_out;
+  FloatT *d_values_out;
+  IntT   *d_num_runs_out;
 
   cudaMalloc((void**)&d_keys_out,       DV * PV * sizeof(IntT));
   cudaMalloc((void**)&d_values_out,     DV * PV * sizeof(FloatT));
   cudaMalloc((void**)&d_num_runs_out,   1 * sizeof(IntT));
 
   cub::DeviceReduce::ReduceByKey(d_temp_storage, temp_storage_bytes,
-    d_tiled_srcs, d_keys_out, d_RMax, d_values_out, d_num_runs_out, cub::Sum(), num_items);
+    d_tiled_nodes, d_keys_out, d_RMax, d_values_out, d_num_runs_out, cub::Sum(), DV * PE);
   cudaMalloc(&d_temp_storage, temp_storage_bytes);
   cub::DeviceReduce::ReduceByKey(d_temp_storage, temp_storage_bytes,
-    d_tiled_srcs, d_keys_out, d_RMax, d_values_out, d_num_runs_out, cub::Sum(), num_items);
+    d_tiled_nodes, d_keys_out, d_RMax, d_values_out, d_num_runs_out, cub::Sum(), DV * PE);
 
   // --------------------------------------------
-  // Add to MU
-  //  !! Need scatterAdd unless all nodes guaranteed to be in `d_srcs`
+  // (Scatter) Add to MU
 
-  __vectorAdd<<<block_dv_pv, THREAD>>>(d_MU, d_values_out, DV * PV);
+  __vectorScatterAdd<<<block_dv_pv, THREAD>>>(d_MU, d_keys_out, d_values_out, d_num_runs_out);
 
   // --------------------------------------------
   // Tile dsts
 
-  IntT *d_tiled_dsts;
-  cudaMalloc((void**)&d_tiled_dsts, DV * PE * sizeof(IntT));
-  cudaMemset(d_tiled_dsts, 0, DV * PE * sizeof(IntT));
-  __tileVectorOffset<<<block_dv_pe, THREAD>>>(d_tiled_dsts, patt->dsts, PE, PV, DV * PE);
+  __tileVectorWithOffset<<<block_dv_pe, THREAD>>>(d_tiled_nodes, patt->dsts_r, PE, PV, DV * PE);
 
   // --------------------------------------
-  // Sort keys + values (should be precomputing)
+  // Reorder data
 
-  IntT *d_keys_tmp;
-  FloatT *d_values_tmp;
-  cudaMalloc((void**)&d_keys_tmp,   DV * PE * sizeof(IntT));
-  cudaMalloc((void**)&d_values_tmp, DV * PE * sizeof(FloatT));
-
-  d_temp_storage = NULL;
-  temp_storage_bytes = 0;
-  cub::DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes,
-      d_tiled_dsts, d_keys_tmp, d_FMax, d_values_tmp, num_items);
-  cudaMalloc(&d_temp_storage, temp_storage_bytes);
-  cub::DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes,
-      d_tiled_dsts, d_keys_tmp, d_FMax, d_values_tmp, num_items);
+  FloatT *d_FMax_r;
+  cudaMalloc((void**)&d_FMax_r, DV * PE * sizeof(FloatT));
+  __reorderEdges<<<block_dv_pe, THREAD>>>(d_FMax_r, d_FMax, patt->map_r, PE, DV * PE);
 
   // --------------------------------------
-  // Sort keys + values (should be precomputing)
+  // Sum reduce
 
   d_temp_storage = NULL; temp_storage_bytes = 0;
   cub::DeviceReduce::ReduceByKey(d_temp_storage, temp_storage_bytes,
-    d_keys_tmp, d_keys_out, d_values_tmp, d_values_out, d_num_runs_out, cub::Sum(), num_items);
+    d_tiled_nodes, d_keys_out, d_FMax_r, d_values_out, d_num_runs_out, cub::Sum(), DV * PE);
   cudaMalloc(&d_temp_storage, temp_storage_bytes);
   cub::DeviceReduce::ReduceByKey(d_temp_storage, temp_storage_bytes,
-    d_keys_tmp, d_keys_out, d_values_tmp, d_values_out, d_num_runs_out, cub::Sum(), num_items);
+    d_tiled_nodes, d_keys_out, d_FMax_r, d_values_out, d_num_runs_out, cub::Sum(), DV * PE);
 
-  // --------------------------------------
   // (Scatter) add to d_MU
-
   __vectorScatterAdd<<<block_dv_pv, THREAD>>>(d_MU, d_keys_out, d_values_out, d_num_runs_out);
 
   // --------------------------------------
   // Free memory
 
-  cudaFree(d_tiled_srcs);
+  cudaFree(d_temp_storage);
+  cudaFree(d_tiled_nodes);
   cudaFree(d_keys_out);
   cudaFree(d_values_out);
   cudaFree(d_num_runs_out);
-  cudaFree(d_temp_storage);
-  cudaFree(d_tiled_dsts);
-  cudaFree(d_keys_tmp);
-  cudaFree(d_values_tmp);
+  cudaFree(d_FMax_r);
 }
 
 __global__ void __FE_RE(
@@ -582,13 +628,13 @@ void RMax(Graph * data, IntT PE, FloatT * d_Cnull, FloatT * d_VFmax, FloatT * d_
   IntT *d_tiled_srcs;
   cudaMalloc((void**)&d_tiled_srcs, DE * PE * sizeof(IntT));
   cudaMemset(d_tiled_srcs, 0, DE * PE * sizeof(IntT));
-  __tileVector<<<block_de_pe, THREAD>>>(d_tiled_srcs, data->srcs, DE, DE * PE);
+  __tileVectorWithOffset<<<block_de_pe, THREAD>>>(d_tiled_srcs, data->srcs, DE, DV, DE * PE);
 
   // --------------------------------------
   // Max reduce rows of transposed matrix
 
   IntT *d_keys_out;
-  FloatT   *d_values_out;
+  FloatT *d_values_out;
   IntT *d_num_runs_out;
   cudaMalloc((void**)&d_keys_out,       DV * PE * sizeof(IntT));
   cudaMalloc((void**)&d_values_out,     DV * PE * sizeof(FloatT));
@@ -601,11 +647,11 @@ void RMax(Graph * data, IntT PE, FloatT * d_Cnull, FloatT * d_VFmax, FloatT * d_
 
   // --------------------------------------
   // Transpose result back to d_RMax
-  //  !! assumes all nodes in `d_srcs`, otherwise need a scatter w/ d_keys_oout
 
   IntT block_dv_pe = 1 + (DV * PE) / THREAD;
   assert(THREAD * block_dv_pe > DV * PE);
-  __transpose<<<block_dv_pe, THREAD>>>(d_RMax, d_values_out, PE, DV);
+  __fillLow<<<block_dv_pe, THREAD>>>(d_RMax, PE * DV);
+  __transposeWithKey<<<block_dv_pe, THREAD>>>(d_RMax, d_values_out, d_keys_out, d_num_runs_out, PE, DV);
 
   // --------------------------------------
   // Elementwise max w/ V*max
@@ -622,7 +668,6 @@ void RMax(Graph * data, IntT PE, FloatT * d_Cnull, FloatT * d_VFmax, FloatT * d_
   cudaFree(d_values_out);
   cudaFree(d_num_runs_out);
   cudaFree(d_temp_storage);
-
 }
 
 
@@ -648,45 +693,39 @@ void FMax(Graph* data, IntT PE, FloatT* d_Cnull, FloatT* d_VRmax, FloatT* d_FE, 
   IntT *d_tiled_dsts;
   cudaMalloc((void**)&d_tiled_dsts, DE * PE * sizeof(IntT));
   cudaMemset(d_tiled_dsts, 0, DE * PE * sizeof(IntT));
-  __tileVectorOffset<<<block_de_pe, THREAD>>>(d_tiled_dsts, data->dsts, DE, DV, DE * PE);
+  __tileVectorWithOffset<<<block_de_pe, THREAD>>>(d_tiled_dsts, data->dsts_r, DE, DV, DE * PE);
 
   // --------------------------------------
-  // Sort keys + values (should be precomputing)
+  // Reorder data
 
-  IntT *d_keys_tmp;
-  FloatT *d_values_tmp;
-  cudaMalloc((void**)&d_keys_tmp,   DE * PE * sizeof(IntT));
-  cudaMalloc((void**)&d_values_tmp, DE * PE * sizeof(FloatT));
-
-  cub::DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes,
-      d_tiled_dsts, d_keys_tmp, d_FEt, d_values_tmp, DE * PE);
-  cudaMalloc(&d_temp_storage, temp_storage_bytes);
-  cub::DeviceRadixSort::SortPairs(d_temp_storage, temp_storage_bytes,
-      d_tiled_dsts, d_keys_tmp, d_FEt, d_values_tmp, DE * PE);
+  FloatT *d_FEt_r;
+  cudaMalloc((void**)&d_FEt_r, DE * PE * sizeof(FloatT));
+  __reorderEdges<<<block_de_pe, THREAD>>>(d_FEt_r, d_FEt, data->map_r, DE, DE * PE);
 
   // --------------------------------------
   // Max reduce rows of transposed matrix
 
-  IntT *d_keys_out;
-  FloatT   *d_values_out;
-  IntT *d_num_runs_out;
+  IntT   *d_keys_out;
+  FloatT *d_values_out;
+  IntT   *d_num_runs_out;
   cudaMalloc((void**)&d_keys_out,       DV * PE * sizeof(IntT));
   cudaMalloc((void**)&d_values_out,     DV * PE * sizeof(FloatT));
   cudaMalloc((void**)&d_num_runs_out,   1 * sizeof(IntT));
 
   d_temp_storage = NULL; temp_storage_bytes = 0;
   cub::DeviceReduce::ReduceByKey(d_temp_storage, temp_storage_bytes,
-    d_keys_tmp, d_keys_out, d_values_tmp, d_values_out, d_num_runs_out, cub::Max(), DE * PE);
+    d_tiled_dsts, d_keys_out, d_FEt_r, d_values_out, d_num_runs_out, cub::Max(), DE * PE);
   cudaMalloc(&d_temp_storage, temp_storage_bytes);
   cub::DeviceReduce::ReduceByKey(d_temp_storage, temp_storage_bytes,
-    d_keys_tmp, d_keys_out, d_values_tmp, d_values_out, d_num_runs_out, cub::Max(), DE * PE);
+    d_tiled_dsts, d_keys_out, d_FEt_r, d_values_out, d_num_runs_out, cub::Max(), DE * PE);
 
   // --------------------------------------
-  // Transpose result back to d_RMax
-  //  !! assumes all nodes in `d_srcs`, otherwise need a scatter w/ d_keys_oout
+  // Transpose result back to d_FMax
+
   IntT block_dv_pe = 1 + (DV * PE) / THREAD;
   assert(THREAD * block_dv_pe > DV * PE);
-  __transpose<<<block_dv_pe, THREAD>>>(d_FMax, d_values_out, PE, DV);
+  __fillLow<<<block_dv_pe, THREAD>>>(d_FMax, PE * DV);
+  __transposeWithKey<<<block_dv_pe, THREAD>>>(d_FMax, d_values_out, d_keys_out, d_num_runs_out, PE, DV);
 
   // --------------------------------------
   // Elementwise max w/ V*max
@@ -698,9 +737,8 @@ void FMax(Graph* data, IntT PE, FloatT* d_Cnull, FloatT* d_VRmax, FloatT* d_FE, 
   // Free memory
 
   cudaFree(d_FEt);
+  cudaFree(d_FEt_r);
   cudaFree(d_tiled_dsts);
-  cudaFree(d_keys_tmp);
-  cudaFree(d_values_tmp);
   cudaFree(d_temp_storage);
   cudaFree(d_keys_out);
   cudaFree(d_values_out);

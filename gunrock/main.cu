@@ -10,12 +10,12 @@ void loadGraph(char * node_filename, char * edge_filename, Graph* d_graph) {
   // -------------------------
   // Read nodes
 
-  IntT num_nodes, node_line_length, node_feat_dim;
+  IntT num_nodes, node_line_length;
   FILE * nodeFile = fopen(node_filename, "r");
   if (! nodeFile) {printf("Cannot open node file %s\n", node_filename); exit(1);}
 
   fscanf(nodeFile, "%lu %lu", & num_nodes, & node_line_length);
-  node_feat_dim = node_line_length - 1;
+  IntT node_feat_dim = node_line_length - 1;
 
   FloatT * node_feats = (FloatT *) malloc(num_nodes * node_feat_dim * sizeof(FloatT));
   IntT * node_ids = (IntT *) malloc(num_nodes * sizeof(IntT));
@@ -31,12 +31,12 @@ void loadGraph(char * node_filename, char * edge_filename, Graph* d_graph) {
   // -------------------------
   // Read edges
 
-  IntT num_edges, edge_line_length, edge_feat_dim;
+  IntT num_edges, edge_line_length;
   FILE * edgeFile = fopen(edge_filename, "r");
   if (! edgeFile) {printf("Cannot open file %s\n", edge_filename); exit(1);}
 
   fscanf(edgeFile, "%lu %lu", & num_edges, & edge_line_length);
-  edge_feat_dim = edge_line_length - 2;
+  IntT edge_feat_dim = edge_line_length - 2;
 
   FloatT * edge_feats = (FloatT *) malloc(num_edges * edge_feat_dim * sizeof(FloatT));
   IntT * srcs         = (IntT *) malloc(num_edges * sizeof(IntT));
@@ -67,6 +67,11 @@ void loadGraph(char * node_filename, char * edge_filename, Graph* d_graph) {
   cudaMemcpy(d_graph->edge_feats, edge_feats, num_edges * edge_feat_dim * sizeof(FloatT), cudaMemcpyHostToDevice);
   cudaMemcpy(d_graph->srcs, srcs, num_edges * sizeof(IntT), cudaMemcpyHostToDevice);
   cudaMemcpy(d_graph->dsts, dsts, num_edges * sizeof(IntT), cudaMemcpyHostToDevice);
+
+  cudaMalloc((void**)&d_graph->srcs_r, num_edges * sizeof(IntT));
+  cudaMalloc((void**)&d_graph->dsts_r, num_edges * sizeof(IntT));
+  cudaMalloc((void**)&d_graph->map_r, num_edges * sizeof(IntT));
+  ac::sort_edges(d_graph->srcs, d_graph->dsts, d_graph->srcs_r, d_graph->dsts_r, d_graph->map_r, num_edges);
 }
 
 
@@ -75,15 +80,15 @@ int main ( int argc, char * argv[] ) {
   // --
   // IO
 
-  char* data_node_path = argv[2];
-  char* data_edge_path = argv[3];
-  char* patt_node_path = argv[4];
-  char* patt_edge_path = argv[5];
 
   Graph data;
+  char* data_node_path = argv[1];
+  char* data_edge_path = argv[2];
   loadGraph(data_node_path, data_edge_path, &data);
 
   Graph patt;
+  char* patt_node_path = argv[3];
+  char* patt_edge_path = argv[4];
   loadGraph(patt_node_path, patt_edge_path, &patt);
 
   // --
@@ -103,17 +108,19 @@ int main ( int argc, char * argv[] ) {
          *FMax;
 
   cudaMalloc((void **)&CV,    data.num_nodes * patt.num_nodes * sizeof(FloatT));
-  cudaMalloc((void **)&CE,    data.num_edges * patt.num_edges * sizeof(FloatT));
-  cudaMalloc((void **)&Cnull, patt.num_edges *                  sizeof(FloatT));
   cudaMalloc((void **)&MU,    data.num_nodes * patt.num_nodes * sizeof(FloatT));
+
+  cudaMalloc((void **)&CE,    data.num_edges * patt.num_edges * sizeof(FloatT));
   cudaMalloc((void **)&RE,    data.num_edges * patt.num_edges * sizeof(FloatT));
   cudaMalloc((void **)&FE,    data.num_edges * patt.num_edges * sizeof(FloatT));
+
   cudaMalloc((void **)&VR,    data.num_nodes * patt.num_edges * sizeof(FloatT));
   cudaMalloc((void **)&VF,    data.num_nodes * patt.num_edges * sizeof(FloatT));
-  cudaMalloc((void **)&VRmax, patt.num_edges *                  sizeof(FloatT));
-  cudaMalloc((void **)&VFmax, patt.num_edges *                  sizeof(FloatT));
+  cudaMalloc((void **)&VRmax,                  patt.num_edges * sizeof(FloatT));
+  cudaMalloc((void **)&VFmax,                  patt.num_edges * sizeof(FloatT));
   cudaMalloc((void **)&RMax,  data.num_nodes * patt.num_edges * sizeof(FloatT));
   cudaMalloc((void **)&FMax,  data.num_nodes * patt.num_edges * sizeof(FloatT));
+  cudaMalloc((void **)&Cnull,                  patt.num_edges * sizeof(FloatT));
 
   // --
   // Initialize algorithm
@@ -154,6 +161,7 @@ int main ( int argc, char * argv[] ) {
     // Compute max over columns of VF/VR
     ac::VFmax_VRmax(data.num_nodes, patt.num_edges, VF, VR, VFmax, VRmax);
 
+    // Repeat rows of VF/VR by data srcs
     ac::FE_RE(&data, patt.num_edges, CE, VF, VR, FE, RE);
     ac::ColumnSoftmax(data.num_edges, patt.num_edges, FE);
     ac::ColumnSoftmax(data.num_edges, patt.num_edges, RE);
@@ -162,7 +170,7 @@ int main ( int argc, char * argv[] ) {
     ac::FMax(&data, patt.num_edges, Cnull, VRmax, FE, FMax);
     ac::RMax(&data, patt.num_edges, Cnull, VFmax, RE, RMax);
 
-    // Sum reduce over edges adjacent to pattern nodes
+    // Replace columns of MU w/ sum over FMax/RMax of adjacent edges + subtract CV
     ac::UpdateMU(&patt, data.num_nodes, CV, FMax, RMax, MU);
     ac::ColumnSoftmax(data.num_nodes, patt.num_nodes, MU);
   }
@@ -172,10 +180,7 @@ int main ( int argc, char * argv[] ) {
 
   FloatT *h_MU = (FloatT *) malloc(data.num_nodes * patt.num_nodes * sizeof(FloatT));
   cudaMemcpy(h_MU, MU, data.num_nodes * patt.num_nodes * sizeof(FloatT), cudaMemcpyDeviceToHost);
-
-  for (IntT i = 0; i < data.num_nodes * patt.num_nodes; i ++) {
-    printf("%e\n", h_MU[i]);
-  }
+  for (IntT i = 0; i < data.num_nodes * patt.num_nodes; i ++) printf("%e\n", h_MU[i]);
 
   // --
   // Free memory

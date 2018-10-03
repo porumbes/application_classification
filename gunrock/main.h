@@ -24,12 +24,15 @@ typedef struct Graph {
 
   IntT* srcs;
   IntT* dsts;
-  IntT* srcs_flipped;
-  IntT* dsts_flipped;
+
+  IntT* srcs_r;
+  IntT* dsts_r;
+  IntT* map_r;
 } Graph;
 
 
 namespace ac {
+  void sort_edges(IntT*, IntT*, IntT*, IntT*, IntT*, IntT);
   void ColumnSoftmax(IntT, IntT, FloatT*);
 
   void Init_CV_MU(Graph*, Graph*, FloatT*, FloatT*);
