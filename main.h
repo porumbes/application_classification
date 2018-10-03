@@ -32,19 +32,42 @@ typedef struct Graph {
 
 
 namespace ac {
-  void sort_edges(IntT*, IntT*, IntT*, IntT*, IntT*, IntT);
-  void ColumnSoftmax(IntT, IntT, FloatT*);
+  namespace host {
 
-  void Init_CV_MU(Graph*, Graph*, FloatT*, FloatT*);
-  void Init_CE_RE_FE(Graph*, Graph*, FloatT*, FloatT*, FloatT*);
+    void SortEdges(
+      IntT*, IntT*, IntT*, IntT*, IntT*, IntT);
 
-  void Init_VR_VF(Graph*, IntT, FloatT*, FloatT*, FloatT*);
-  void VFmax_VRmax(IntT, IntT, FloatT*, FloatT*, FloatT*, FloatT*);
-  void VF_VR(Graph*, IntT, FloatT*, FloatT*, FloatT*, FloatT*, FloatT*);
-  void UpdateMU(Graph*, IntT, FloatT*, FloatT*, FloatT*, FloatT*);
-  void FE_RE(Graph *, IntT, FloatT*, FloatT*, FloatT*, FloatT*, FloatT*);
-  void FMax(Graph *, IntT, FloatT*, FloatT*, FloatT*, FloatT*);
-  void RMax(Graph *, IntT, FloatT*, FloatT*, FloatT*, FloatT*);
+    void ColumnMax(
+      IntT, IntT, FloatT*, FloatT*);
+
+    void ColumnSoftmax(
+      IntT, IntT, FloatT*);
+
+    void EdgeMaxReduce(
+      IntT, IntT, IntT, FloatT*, FloatT*, FloatT*, IntT*, IntT*);
+
+    void ComputeMU(
+      Graph*, IntT, FloatT*, FloatT*, FloatT*, FloatT*);
+
+  }
+  namespace device {
+
+    __global__ void NodePairwiseNorm(
+      IntT, IntT, FloatT*, FloatT*, FloatT*, FloatT*, IntT);
+
+    __global__ void EdgePairwiseNorm(
+      IntT, IntT, FloatT*, FloatT*, FloatT*, FloatT*, FloatT*, IntT);
+
+    __global__ void RepeatColumnsByPatternEdges(
+      IntT, IntT, IntT, FloatT*, FloatT*, FloatT*, IntT*, IntT*);
+
+    __global__ void RepeatColumnsByPatternEdgesSubtract(
+      IntT, IntT, IntT, FloatT*, FloatT*, FloatT*, FloatT*, FloatT*, IntT*, IntT*);
+
+    __global__ void RepeatColumnsByDataEdges(
+      IntT, IntT, FloatT*, FloatT*, FloatT*, FloatT*, FloatT*, IntT*);
+
+  }
 }
 
 #endif

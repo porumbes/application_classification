@@ -5,6 +5,8 @@
 #include "main.h"
 #include "assert.h"
 
+#define THREAD 1024
+
 void loadGraph(char * node_filename, char * edge_filename, Graph* d_graph) {
 
   // -------------------------
@@ -71,7 +73,6 @@ void loadGraph(char * node_filename, char * edge_filename, Graph* d_graph) {
   cudaMalloc((void**)&d_graph->srcs_r, num_edges * sizeof(IntT));
   cudaMalloc((void**)&d_graph->dsts_r, num_edges * sizeof(IntT));
   cudaMalloc((void**)&d_graph->map_r, num_edges * sizeof(IntT));
-  ac::sort_edges(d_graph->srcs, d_graph->dsts, d_graph->srcs_r, d_graph->dsts_r, d_graph->map_r, num_edges);
 }
 
 
@@ -96,7 +97,6 @@ int main ( int argc, char * argv[] ) {
 
   FloatT *CV,
          *CE,
-         *Cnull,
          *MU,
          *RE,
          *FE,
@@ -106,6 +106,8 @@ int main ( int argc, char * argv[] ) {
          *VFmax,
          *RMax,
          *FMax;
+
+  // FloatT *Cnull; // Ignoring for now
 
   cudaMalloc((void **)&CV,    data.num_nodes * patt.num_nodes * sizeof(FloatT));
   cudaMalloc((void **)&MU,    data.num_nodes * patt.num_nodes * sizeof(FloatT));
@@ -120,59 +122,131 @@ int main ( int argc, char * argv[] ) {
   cudaMalloc((void **)&VFmax,                  patt.num_edges * sizeof(FloatT));
   cudaMalloc((void **)&RMax,  data.num_nodes * patt.num_edges * sizeof(FloatT));
   cudaMalloc((void **)&FMax,  data.num_nodes * patt.num_edges * sizeof(FloatT));
-  cudaMalloc((void **)&Cnull,                  patt.num_edges * sizeof(FloatT));
+  // cudaMalloc((void **)&Cnull,                  patt.num_edges * sizeof(FloatT));
+
+  IntT block_vv = 1 + (data.num_nodes * patt.num_nodes) / THREAD;
+  IntT block_ee = 1 + (data.num_edges * patt.num_edges) / THREAD;
+  IntT block_ve = 1 + (data.num_nodes * patt.num_edges) / THREAD;
 
   // --
   // Initialize algorithm
 
+  ac::host::SortEdges(data.srcs, data.dsts, data.srcs_r, data.dsts_r, data.map_r, data.num_edges);
+  ac::host::SortEdges(patt.srcs, patt.dsts, patt.srcs_r, patt.dsts_r, patt.map_r, patt.num_edges);
+
   // Node-node distance matrix
-  ac::Init_CV_MU(&data, &patt, CV, MU);
+  ac::device::NodePairwiseNorm<<<block_vv, THREAD>>>(
+    data.num_nodes,
+    patt.num_nodes,
+    CV,
+    MU,
+    data.node_feats,
+    patt.node_feats,
+    data.node_feat_dim
+  );
+
 
   // Edge-edge distance matrix
-  ac::Init_CE_RE_FE(&data, &patt, CE, RE, FE);
+  ac::device::EdgePairwiseNorm<<<block_ee, THREAD>>>(
+    data.num_edges,
+    patt.num_edges,
+    CE,
+    RE,
+    FE,
+    data.edge_feats,
+    patt.edge_feats,
+    data.edge_feat_dim
+  );
 
   // Normalize distance matrices (could all happen in parallel)
-  ac::ColumnSoftmax(data.num_nodes, patt.num_nodes, CV);
-  ac::ColumnSoftmax(data.num_nodes, patt.num_nodes, MU);
-  ac::ColumnSoftmax(data.num_edges, patt.num_edges, CE);
-  ac::ColumnSoftmax(data.num_edges, patt.num_edges, RE);
-  ac::ColumnSoftmax(data.num_edges, patt.num_edges, FE);
+  ac::host::ColumnSoftmax(data.num_nodes, patt.num_nodes, CV);
+  ac::host::ColumnSoftmax(data.num_nodes, patt.num_nodes, MU);
+  ac::host::ColumnSoftmax(data.num_edges, patt.num_edges, CE);
+  ac::host::ColumnSoftmax(data.num_edges, patt.num_edges, RE);
+  ac::host::ColumnSoftmax(data.num_edges, patt.num_edges, FE);
 
   // Repeat columns of MU by pattern edgelist
-  ac::Init_VR_VF(&patt, data.num_nodes, MU, VR, VF);
+  ac::device::RepeatColumnsByPatternEdges<<<block_ve, THREAD>>>(
+    data.num_nodes,
+    patt.num_edges,
+    patt.num_nodes,
+    MU,
+    VR,
+    VF,
+    patt.srcs,
+    patt.dsts
+  );
 
-  // Hardcode to 0
-  cudaMemset(Cnull, 0, patt.num_edges * sizeof(FloatT));
+  // Hardcode Cnull to 0
+  // cudaMemset(Cnull, 0, patt.num_edges * sizeof(FloatT));
 
   // Compute max over columns of VF/VR
-  ac::VFmax_VRmax(data.num_nodes, patt.num_edges, VF, VR, VFmax, VRmax);
+  ac::host::ColumnMax(data.num_nodes, patt.num_edges, VF, VFmax);
+  ac::host::ColumnMax(data.num_nodes, patt.num_edges, VR, VRmax);
 
   // Max reduce over edges adjacent to data nodes
-  ac::FMax(&data, patt.num_edges, Cnull, VRmax, FE, FMax);
-  ac::RMax(&data, patt.num_edges, Cnull, VFmax, RE, RMax);
+  ac::host::EdgeMaxReduce(data.num_edges, data.num_nodes, patt.num_edges,
+    VRmax, FE, FMax,
+    data.dsts_r, data.map_r
+  );
+
+  ac::host::EdgeMaxReduce(
+    data.num_edges, data.num_nodes, patt.num_edges,
+    VFmax, RE, RMax,
+    data.srcs, NULL
+  );
 
   // --
   // Run
 
   for (IntT i = 0; i < patt.num_nodes; i++) {
     // Repeat columns of (MU - FMax) by pattern edgelist
-    ac::VF_VR(&patt, data.num_nodes, MU, FMax, RMax, VF, VR);
+    ac::device::RepeatColumnsByPatternEdgesSubtract<<<block_ve, THREAD>>>(
+      data.num_nodes,
+      patt.num_edges,
+      patt.num_nodes,
+      MU,
+      VR,
+      VF,
+      FMax,
+      RMax,
+      patt.srcs,
+      patt.dsts
+    );
 
     // Compute max over columns of VF/VR
-    ac::VFmax_VRmax(data.num_nodes, patt.num_edges, VF, VR, VFmax, VRmax);
+    ac::host::ColumnMax(data.num_nodes, patt.num_edges, VF, VFmax);
+    ac::host::ColumnMax(data.num_nodes, patt.num_edges, VR, VRmax);
 
     // Repeat rows of VF/VR by data srcs
-    ac::FE_RE(&data, patt.num_edges, CE, VF, VR, FE, RE);
-    ac::ColumnSoftmax(data.num_edges, patt.num_edges, FE);
-    ac::ColumnSoftmax(data.num_edges, patt.num_edges, RE);
+    ac::device::RepeatColumnsByDataEdges<<<block_ee, THREAD>>>(
+      data.num_edges,
+      patt.num_edges,
+      CE,
+      VR,
+      VF,
+      FE,
+      RE,
+      data.srcs
+    );
+    ac::host::ColumnSoftmax(data.num_edges, patt.num_edges, FE);
+    ac::host::ColumnSoftmax(data.num_edges, patt.num_edges, RE);
 
     // Max aggregation over edges adjacent to data nodes
-    ac::FMax(&data, patt.num_edges, Cnull, VRmax, FE, FMax);
-    ac::RMax(&data, patt.num_edges, Cnull, VFmax, RE, RMax);
+    ac::host::EdgeMaxReduce(data.num_edges, data.num_nodes, patt.num_edges,
+      VRmax, FE, FMax,
+      data.dsts_r, data.map_r
+    );
+
+    ac::host::EdgeMaxReduce(
+      data.num_edges, data.num_nodes, patt.num_edges,
+      VFmax, RE, RMax,
+      data.srcs, NULL
+    );
 
     // Replace columns of MU w/ sum over FMax/RMax of adjacent edges + subtract CV
-    ac::UpdateMU(&patt, data.num_nodes, CV, FMax, RMax, MU);
-    ac::ColumnSoftmax(data.num_nodes, patt.num_nodes, MU);
+    ac::host::ComputeMU(&patt, data.num_nodes, CV, FMax, RMax, MU);
+    ac::host::ColumnSoftmax(data.num_nodes, patt.num_nodes, MU);
   }
 
   // --
@@ -187,7 +261,7 @@ int main ( int argc, char * argv[] ) {
 
   cudaFree(CV);
   cudaFree(CE);
-  cudaFree(Cnull);
+  // cudaFree(Cnull);
   cudaFree(MU);
   cudaFree(RE);
   cudaFree(FE);

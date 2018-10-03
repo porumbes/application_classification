@@ -13,11 +13,11 @@ from scipy.spatial.distance import cdist
 # --
 # IO
 
-data_vertex    = pd.read_csv('../data/georgiyData.Vertex.csv', skiprows=1, sep=' ', header=None)
-pattern_vertex = pd.read_csv('../data/georgiyPattern.Vertex.csv', skiprows=1, sep=' ', header=None)
+data_vertex    = pd.read_csv('./data/georgiyData.Vertex.csv', skiprows=1, sep=' ', header=None)
+pattern_vertex = pd.read_csv('./data/georgiyPattern.Vertex.csv', skiprows=1, sep=' ', header=None)
 
-data_edges    = pd.read_csv('../data/georgiyData.Edges.csv', skiprows=1, sep=' ', header=None)
-pattern_edges = pd.read_csv('../data/georgiyPattern.Edges.csv', skiprows=1, sep=' ', header=None)
+data_edges    = pd.read_csv('./data/georgiyData.Edges.csv', skiprows=1, sep=' ', header=None)
+pattern_edges = pd.read_csv('./data/georgiyPattern.Edges.csv', skiprows=1, sep=' ', header=None)
 
 assert (data_vertex[0] == data_vertex.index).all()
 assert (pattern_vertex[0] == pattern_vertex.index).all()

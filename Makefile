@@ -6,10 +6,10 @@ ARCH=\
 
 all : main
 
-main: main.cu kernels.cu
+main: main.cu ac.cu
 	nvcc $(ARCH) -o main \
 		--compiler-options -Wall \
-		main.cu kernels.cu \
+		main.cu ac.cu \
 		-I cub/cub
 
 clean:
