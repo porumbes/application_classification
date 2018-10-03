@@ -80,8 +80,8 @@ for _ in range(num_pv):
     fmax = np.tile(-cnull + vr_max, num_dv).reshape(num_dv, -1)
     rmax = np.tile(-cnull + vf_max, num_dv).reshape(num_dv, -1)
     for edge_idx, (src, dst) in enumerate(data_edges):
-        fmax[dst] = np.maximum(fmax[dst], fe[edge_idx])
         rmax[src] = np.maximum(rmax[src], re[edge_idx])
+        fmax[dst] = np.maximum(fmax[dst], fe[edge_idx])
         
     mu = -cv
     for edge_idx, (src, dst) in enumerate(pattern_edges):

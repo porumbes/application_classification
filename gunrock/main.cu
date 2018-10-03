@@ -83,13 +83,14 @@ int main ( int argc, char * argv[] ) {
   uint64_t DV = h_Data_Graph.num_vertices;
   uint64_t PV = h_Pattern_Graph.num_vertices;
 
-  for (uint64_t i = 0; i < PV; i++) {
+
+  // for (uint64_t i = 0; i < PV; i++) {
       run_iteration(
         &h_Data_Graph, &h_Pattern_Graph,
         &d_Data_Graph, &d_Pattern_Graph,
         h_WA, d_WA
       );
-  }
+  // }
 
   // --
   // Print results

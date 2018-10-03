@@ -112,7 +112,7 @@ for edge_idx, (src, dst) in enumerate(data_edges):
 
 v_fwd = np.zeros((num_dv, num_pe)) # num_dv x num_pe
 v_bak = np.zeros((num_dv, num_pe)) # num_dv x num_pe
-for _ in range(num_pv):
+for _ in range(1):
     
     for p_edge_idx, (src, dst) in enumerate(pattern_edges):
         v_fwd[:,p_edge_idx] = mu[:,dst] - fwd_max[:,p_edge_idx]
@@ -124,11 +124,16 @@ for _ in range(num_pv):
     v_fwd_max = v_fwd.max(axis=0)
     v_bak_max = v_bak.max(axis=0)
     
-    fwd_max = np.tile(v_bak_max - cnull, num_dv).reshape(num_dv, -1) # num_pv x num_pe
-    bak_max = np.tile(v_fwd_max - cnull, num_dv).reshape(num_dv, -1) # num_pv x num_pe
+    fwd_max = np.tile(v_bak_max - cnull, num_dv).reshape(num_dv, -1) # num_dv x num_pe
+    bak_max = np.tile(v_fwd_max - cnull, num_dv).reshape(num_dv, -1) # num_dv x num_pe
+    # bak_max = np.zeros((num_dv, num_pe)) - np.inf
+    # fwd_max = np.zeros((num_dv, num_pe)) - np.inf
     for d_edge_idx, (src, dst) in enumerate(data_edges):
-        fwd_max[dst] = np.maximum(fwd_max[dst], e_fwd[d_edge_idx])
         bak_max[src] = np.maximum(bak_max[src], e_bak[d_edge_idx])
+        fwd_max[dst] = np.maximum(fwd_max[dst], e_fwd[d_edge_idx])
+    
+    print(bak_max[0,:10])
+    print(bak_max[:10,0])
     
     mu = np.zeros(cv.shape)
     for p_edge_idx, (src, dst) in enumerate(pattern_edges):

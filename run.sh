@@ -5,7 +5,7 @@
 make clean
 make
 rm -f orig_result
-./main 2 \
+time ./main 2 \
     data/georgiyData.Vertex.csv \
     data/georgiyData.Edges.csv \
     data/georgiyPattern.Vertex.csv \
