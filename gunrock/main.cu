@@ -3,124 +3,71 @@
 
 #include <iostream>
 #include "main.h"
+#include "kernels.cuh"
+#include "assert.h"
 
-// void loadGraph(char * edge_filename, char * node_filename, Graph* graph) {
+void loadGraph(char * node_filename, char * edge_filename, Graph* d_graph) {
 
-//   // -------------------------
-//   // Read nodes
+  // -------------------------
+  // Read nodes
 
-//   uint64_t num_nodes, node_feat_dim;
-//   FILE * nodeFile = fopen(node_filename, "r");
-//   if (! nodeFile) {printf("Cannot open node file %s\n", node_filename); exit(1);}
+  IntT num_nodes, node_line_length, node_feat_dim;
+  FILE * nodeFile = fopen(node_filename, "r");
+  if (! nodeFile) {printf("Cannot open node file %s\n", node_filename); exit(1);}
 
-//   fscanf(nodeFile, "%lu %lu", & num_nodes, & node_feat_dim);
-//   uint64_t * node_table = (uint64_t *) malloc(num_nodes * node_feat_dim * sizeof(uint64_t));
-//   for (uint64_t i = 0; i < num_nodes * node_feat_dim; i += node_feat_dim) {
-//     fscanf(nodeFile, "%lu", node_table + i); // read node id
-//     for (uint64_t j = 1; j < node_feat_dim; j ++) {
-//         fscanf(nodeFile, "%lf", (double *) (node_table + i + j)); // read attribute
-//     }
-//   }
+  fscanf(nodeFile, "%lu %lu", & num_nodes, & node_line_length);
+  node_feat_dim = node_line_length - 1;
 
-//   // -------------------------
-//   // Read edges
+  FloatT * node_feats = (FloatT *) malloc(num_nodes * node_feat_dim * sizeof(FloatT));
+  IntT * node_ids = (IntT *) malloc(num_nodes * sizeof(IntT));
 
-//   uint64_t num_edges, edge_feat_dim;
-//   FILE * edgeFile = fopen(edge_filename, "r");
-//   if (! edgeFile) {printf("Cannot open file %s\n", edge_filename); exit(1);}
-
-//   fscanf(edgeFile, "%lu %lu", & num_edges, & edge_feat_dim);
-//   uint64_t * edge_table = (uint64_t *) malloc(num_edges * edge_feat_dim * sizeof(uint64_t));
-
-//   uint64_t * srcs = (uint64_t *) malloc(num_edges * sizeof(uint64_t));
-//   uint64_t * dsts = (uint64_t *) malloc(num_edges * sizeof(uint64_t));
-
-//   for (uint64_t i = 0; i < num_edges * edge_feat_dim; i += edge_feat_dim) {
-//     fscanf(edgeFile, "%lu", srcs + i); // read src
-//     fscanf(edgeFile, "%lu", dsts + i); // read dst
-//     for (uint64_t j = 0; j < edge_feat_dim - 2; j ++) {
-//         fscanf(edgeFile, "%lf", (double *) (edge_table + i + j));
-//     }
-//   }
-// }
-
-Graph constructGraph(Table * Vtable, Table * Etable) {
-  Graph graph;
-  graph.Vtable       = * Vtable;
-  graph.Etable       = * Etable;
-  graph.num_edges    = Etable->num_rows;
-  graph.num_vertices = Vtable->num_rows;
-  return graph;
-}
-
-Table readEdgeTable(char * edge_filename) {
-  uint64_t num_edges, edge_feat_dim;
-  FILE * tableFile = fopen(edge_filename, "r");
-  if (! tableFile) {printf("Cannot open file %s\n", edge_filename); exit(1);}
-
-  fscanf(tableFile, "%lu %lu", & num_edges, & edge_feat_dim);
-  uint64_t * table = (uint64_t *) malloc(num_edges * edge_feat_dim * sizeof(uint64_t));
-
-  for (uint64_t i = 0; i < num_edges * edge_feat_dim; i += edge_feat_dim) {
-      fscanf(tableFile, "%lu", table + i);                          // read src id
-      fscanf(tableFile, "%lu", table + i + 1);                      // read dst id
-
-      for (uint64_t j = 2; j < edge_feat_dim; j ++) {
-          fscanf(tableFile, "%lf", (double *) (table + i + j));     // read attribute
-  }   }
-
-  Table edgeTable;
-  edgeTable.num_rows = num_edges;
-  edgeTable.num_cols = edge_feat_dim;
-  edgeTable.table    = table;
-  return edgeTable;
-}
-
-Table readVertexTable(char * node_filename) {
-  uint64_t num_nodes, node_feat_dim;
-  FILE * tableFile = fopen(node_filename, "r");
-  if (! tableFile) {printf("Cannot open file %s\n", node_filename); exit(1);}
-
-  fscanf(tableFile, "%lu %lu", & num_nodes, & node_feat_dim);
-  uint64_t * table = (uint64_t *) malloc(num_nodes * node_feat_dim * sizeof(uint64_t));
-
-  for (uint64_t i = 0; i < num_nodes * node_feat_dim; i += node_feat_dim) {
-      fscanf(tableFile, "%lu", table + i);                          // read id
-
-      for (uint64_t j = 1; j < node_feat_dim; j ++) {
-          fscanf(tableFile, "%lf", (double *) (table + i + j));     // read attribute
-  }   }
-
-  Table vertexTable;
-  vertexTable.num_rows = num_nodes;
-  vertexTable.num_cols = node_feat_dim;
-  vertexTable.table    = table;
-  return vertexTable;
-}
-
-
-void table2device(Table* d_table, Table* h_table) {
-  d_table->num_rows = h_table->num_rows;
-  d_table->num_cols = h_table->num_cols;
-
-  cudaMalloc((void**)&d_table->table, h_table->num_rows * h_table->num_cols * sizeof(uint64_t));
-  cudaMemcpy(d_table->table, h_table->table,
-    h_table->num_rows * h_table->num_cols * sizeof(uint64_t), cudaMemcpyHostToDevice);
-
-  uint64_t h_srcs[d_table->num_rows];
-  uint64_t h_dsts[d_table->num_rows];
-  for(uint64_t i = 0; i < d_table->num_rows; i++) {
-    h_srcs[i] = h_table->table[i * d_table->num_cols];
-    h_dsts[i] = h_table->table[i * d_table->num_cols + 1];
+  for (IntT node_idx = 0; node_idx < num_nodes; node_idx++) {
+    fscanf(nodeFile, "%lu", node_ids + node_idx);
+    assert(node_ids[node_idx] == node_idx);
+    for (IntT feat_idx = 0; feat_idx < node_feat_dim; feat_idx ++) {
+        fscanf(nodeFile, "%lf", (FloatT *) (node_feats + (node_feat_dim * node_idx) + feat_idx));
+    }
   }
 
-  cudaMalloc((void**)&d_table->srcs, h_table->num_rows * sizeof(uint64_t));
-  cudaMalloc((void**)&d_table->dsts, h_table->num_rows * sizeof(uint64_t));
-  cudaMemcpy(d_table->srcs, h_srcs, h_table->num_rows * sizeof(uint64_t), cudaMemcpyHostToDevice);
-  cudaMemcpy(d_table->dsts, h_dsts, h_table->num_rows * sizeof(uint64_t), cudaMemcpyHostToDevice);
+  // -------------------------
+  // Read edges
 
-  cudaMalloc((void**)&d_table->srcs_r, h_table->num_rows * sizeof(uint64_t));
-  cudaMalloc((void**)&d_table->dsts_r, h_table->num_rows * sizeof(uint64_t));
+  IntT num_edges, edge_line_length, edge_feat_dim;
+  FILE * edgeFile = fopen(edge_filename, "r");
+  if (! edgeFile) {printf("Cannot open file %s\n", edge_filename); exit(1);}
+
+  fscanf(edgeFile, "%lu %lu", & num_edges, & edge_line_length);
+  edge_feat_dim = edge_line_length - 2;
+
+  FloatT * edge_feats = (FloatT *) malloc(num_edges * edge_feat_dim * sizeof(FloatT));
+  IntT * srcs         = (IntT *) malloc(num_edges * sizeof(IntT));
+  IntT * dsts         = (IntT *) malloc(num_edges * sizeof(IntT));
+
+  for (IntT edge_idx = 0; edge_idx < num_edges; edge_idx++) {
+    fscanf(edgeFile, "%lu", srcs + edge_idx); // read src
+    fscanf(edgeFile, "%lu", dsts + edge_idx); // read dst
+    for (IntT feat_idx = 0; feat_idx < edge_feat_dim; feat_idx ++) {
+        fscanf(edgeFile, "%lf", (FloatT *) (edge_feats + (edge_feat_dim * edge_idx) + feat_idx));
+    }
+  }
+
+  // -------------------------
+  // Build graph
+
+  d_graph->num_nodes     = num_nodes;
+  d_graph->num_edges     = num_edges;
+  d_graph->node_feat_dim = node_feat_dim;
+  d_graph->edge_feat_dim = edge_feat_dim;
+
+  cudaMalloc((void**)&d_graph->node_feats, num_nodes * node_feat_dim * sizeof(FloatT));
+  cudaMalloc((void**)&d_graph->edge_feats, num_edges * edge_feat_dim * sizeof(FloatT));
+  cudaMalloc((void**)&d_graph->srcs, num_edges * sizeof(IntT));
+  cudaMalloc((void**)&d_graph->dsts, num_edges * sizeof(IntT));
+
+  cudaMemcpy(d_graph->node_feats, node_feats, num_nodes * node_feat_dim * sizeof(FloatT), cudaMemcpyHostToDevice);
+  cudaMemcpy(d_graph->edge_feats, edge_feats, num_edges * edge_feat_dim * sizeof(FloatT), cudaMemcpyHostToDevice);
+  cudaMemcpy(d_graph->srcs, srcs, num_edges * sizeof(IntT), cudaMemcpyHostToDevice);
+  cudaMemcpy(d_graph->dsts, dsts, num_edges * sizeof(IntT), cudaMemcpyHostToDevice);
 }
 
 
@@ -129,49 +76,78 @@ int main ( int argc, char * argv[] ) {
   // --
   // IO
 
-  Table h_Data_Vtable    = readVertexTable(argv[2]);
-  Table h_Data_Etable    = readEdgeTable(argv[3]);
-  Table h_Pattern_Vtable = readVertexTable(argv[4]);
-  Table h_Pattern_Etable = readEdgeTable(argv[5]);
+  char* data_node_path = argv[2];
+  char* data_edge_path = argv[3];
+  char* patt_node_path = argv[4];
+  char* patt_edge_path = argv[5];
 
-  Table d_Data_Vtable;
-  table2device(&d_Data_Vtable, &h_Data_Vtable);
+  Graph d_data_graph;
+  loadGraph(data_node_path, data_edge_path, &d_data_graph);
 
-  Table d_Data_Etable;
-  table2device(&d_Data_Etable, &h_Data_Etable);
+  Graph d_patt_graph;
+  loadGraph(patt_node_path, patt_edge_path, &d_patt_graph);
 
-  Table d_Pattern_Vtable;
-  table2device(&d_Pattern_Vtable, &h_Pattern_Vtable);
-
-  Table d_Pattern_Etable;
-  table2device(&d_Pattern_Etable, &h_Pattern_Etable);
-
-  Graph d_Data_Graph    = constructGraph(&d_Data_Vtable, &d_Data_Etable);
-  Graph d_Pattern_Graph = constructGraph(&d_Pattern_Vtable, &d_Pattern_Etable);
+  const IntT DV = d_data_graph.num_nodes;
+  const IntT DE = d_data_graph.num_edges;
+  const IntT PV = d_patt_graph.num_nodes;
+  const IntT PE = d_patt_graph.num_edges;
 
   // --
-  // Init
+  // Allocation
 
   WorkArrays d_WA;
-  initializeWorkArrays(&d_Data_Graph, &d_Pattern_Graph, d_WA);
+  cudaMalloc((void **)&d_WA.CV,    DV * PV * sizeof(FloatT));
+  cudaMalloc((void **)&d_WA.CE,    DE * PE * sizeof(FloatT));
+  cudaMalloc((void **)&d_WA.Cnull, PE *      sizeof(FloatT));
+  cudaMalloc((void **)&d_WA.MU,    DV * PV * sizeof(FloatT));
+  cudaMalloc((void **)&d_WA.RE,    DE * PE * sizeof(FloatT));
+  cudaMalloc((void **)&d_WA.FE,    DE * PE * sizeof(FloatT));
+  cudaMalloc((void **)&d_WA.VR,    DV * PE * sizeof(FloatT));
+  cudaMalloc((void **)&d_WA.VF,    DV * PE * sizeof(FloatT));
+  cudaMalloc((void **)&d_WA.VRmax, PE *      sizeof(FloatT));
+  cudaMalloc((void **)&d_WA.VFmax, PE *      sizeof(FloatT));
+  cudaMalloc((void **)&d_WA.RMax,  DV * PE * sizeof(FloatT));
+  cudaMalloc((void **)&d_WA.FMax,  DV * PE * sizeof(FloatT));
+
+  // --
+  // Initialization
+
+  d_Init_CV_MU(&d_data_graph, &d_patt_graph, d_WA.CV, d_WA.MU);
+  d_NormProb(DV, PV, d_WA.CV);
+  d_NormProb(DV, PV, d_WA.MU);
+  d_Init_VR_VF(&d_data_graph, &d_patt_graph, d_WA.MU, d_WA.VR, d_WA.VF);
+  d_Init_CE_RE_FE(&d_data_graph, &d_patt_graph, d_WA.CE, d_WA.RE, d_WA.FE);
+  d_NormProb(DE, PE, d_WA.CE);
+  d_NormProb(DE, PE, d_WA.RE);
+  d_NormProb(DE, PE, d_WA.FE);
+  cudaMemset(d_WA.Cnull, 0, PE * sizeof(FloatT));
+  d_VFmax_VRmax(&d_data_graph, &d_patt_graph, d_WA.VF, d_WA.VR, d_WA.VFmax, d_WA.VRmax);
+  d_FMax(&d_data_graph, &d_patt_graph, d_WA.Cnull, d_WA.VRmax, d_WA.FE, d_WA.FMax);
+  d_RMax(&d_data_graph, &d_patt_graph, d_WA.Cnull, d_WA.VFmax, d_WA.RE, d_WA.RMax);
 
   // --
   // Run
 
-  const uint64_t DV = d_Data_Graph.num_vertices;
-  const uint64_t PV = d_Pattern_Graph.num_vertices;
+  for (IntT i = 0; i < PV; i++) {
+    d_VF_VR(&d_data_graph, &d_patt_graph, d_WA.MU, d_WA.FMax, d_WA.RMax, d_WA.VF, d_WA.VR);
+    d_VFmax_VRmax(&d_data_graph, &d_patt_graph, d_WA.VF, d_WA.VR, d_WA.VFmax, d_WA.VRmax);
+    d_FE_RE(&d_data_graph, &d_patt_graph, d_WA.CE, d_WA.VF, d_WA.VR, d_WA.FE, d_WA.RE);
+    d_NormProb(DE, PE, d_WA.FE);
+    d_NormProb(DE, PE, d_WA.RE);
 
-  for (uint64_t i = 0; i < PV; i++) {
-      run_iteration(&d_Data_Graph, &d_Pattern_Graph, d_WA);
+    d_FMax(&d_data_graph, &d_patt_graph, d_WA.Cnull, d_WA.VRmax, d_WA.FE, d_WA.FMax);
+    d_RMax(&d_data_graph, &d_patt_graph, d_WA.Cnull, d_WA.VFmax, d_WA.RE, d_WA.RMax);
+    d_UpdateMU(&d_data_graph, &d_patt_graph, d_WA.CV, d_WA.FMax, d_WA.RMax, d_WA.MU);
+    d_NormProb(DV, PV, d_WA.MU);
   }
 
   // --
-  // Print results
+  // Copy results to host and print
 
-  double *h_MU = (double *) malloc(DV * PV * sizeof(double));
-  cudaMemcpy(h_MU, d_WA.MU, DV * PV * sizeof(double), cudaMemcpyDeviceToHost);
+  FloatT *h_MU = (FloatT *) malloc(DV * PV * sizeof(FloatT));
+  cudaMemcpy(h_MU, d_WA.MU, DV * PV * sizeof(FloatT), cudaMemcpyDeviceToHost);
 
-  for (uint64_t i = 0; i < DV * PV; i ++) {
+  for (IntT i = 0; i < DV * PV; i ++) {
     printf("%e\n", h_MU[i]);
   }
   return 0;
