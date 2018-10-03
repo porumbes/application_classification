@@ -72,8 +72,8 @@ for _ in range(num_pv):
     vf = mu[:,pattern_edges[:,1]] - fmax
     vr = mu[:,pattern_edges[:,0]] - rmax
     
-    re = normprob(- ce + vf[data_edges[:,0]])
-    fe = normprob(- ce + vr[data_edges[:,0]])
+    re = normprob(vf[data_edges[:,0]] - ce)
+    fe = normprob(vr[data_edges[:,0]] - ce)
     
     vf_max = vf.max(axis=0)
     vr_max = vr.max(axis=0)

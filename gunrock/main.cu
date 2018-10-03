@@ -13,6 +13,50 @@ Graph constructGraph(Table * Vtable, Table * Etable) {
   return graph;
 }
 
+Table readEdgeTable(char * filename) {
+  uint64_t num_rows, num_cols;
+  FILE * tableFile = fopen(filename, "r");
+  if (! tableFile) {printf("Cannot open file %s\n", filename); exit(1);}
+
+  fscanf(tableFile, "%lu %lu", & num_rows, & num_cols);
+  uint64_t * table = (uint64_t *) malloc(num_rows * num_cols * sizeof(uint64_t));
+
+  for (uint64_t i = 0; i < num_rows * num_cols; i += num_cols) {
+      fscanf(tableFile, "%lu", table + i);                          // read src id
+      fscanf(tableFile, "%lu", table + i + 1);                      // read dst id
+
+      for (uint64_t j = 2; j < num_cols; j ++) {
+          fscanf(tableFile, "%lf", (double *) (table + i + j));     // read attribute
+  }   }
+
+  Table edgeTable;
+  edgeTable.num_rows = num_rows;
+  edgeTable.num_cols = num_cols;
+  edgeTable.table    = table;
+  return edgeTable;
+}
+
+Table readVertexTable(char * filename) {
+  uint64_t num_rows, num_cols;
+  FILE * tableFile = fopen(filename, "r");
+  if (! tableFile) {printf("Cannot open file %s\n", filename); exit(1);}
+
+  fscanf(tableFile, "%lu %lu", & num_rows, & num_cols);
+  uint64_t * table = (uint64_t *) malloc(num_rows * num_cols * sizeof(uint64_t));
+
+  for (uint64_t i = 0; i < num_rows * num_cols; i += num_cols) {
+      fscanf(tableFile, "%lu", table + i);                          // read id
+
+      for (uint64_t j = 1; j < num_cols; j ++) {
+          fscanf(tableFile, "%lf", (double *) (table + i + j));     // read attribute
+  }   }
+
+  Table vertexTable;
+  vertexTable.num_rows = num_rows;
+  vertexTable.num_cols = num_cols;
+  vertexTable.table    = table;
+  return vertexTable;
+}
 
 
 void table2device(Table* d_table, Table* h_table) {
@@ -23,18 +67,21 @@ void table2device(Table* d_table, Table* h_table) {
   cudaMemcpy(d_table->table, h_table->table,
     h_table->num_rows * h_table->num_cols * sizeof(uint64_t), cudaMemcpyHostToDevice);
 
-  uint64_t srcs[d_table->num_rows];
-  uint64_t dsts[d_table->num_rows];
+  uint64_t h_srcs[d_table->num_rows];
+  uint64_t h_dsts[d_table->num_rows];
   for(uint64_t i = 0; i < d_table->num_rows; i++) {
-    srcs[i] = h_table->table[i * d_table->num_cols];
-    dsts[i] = h_table->table[i * d_table->num_cols + 1];
+    h_srcs[i] = h_table->table[i * d_table->num_cols];
+    h_dsts[i] = h_table->table[i * d_table->num_cols + 1];
   }
 
   cudaMalloc((void**)&d_table->srcs, h_table->num_rows * sizeof(uint64_t));
   cudaMalloc((void**)&d_table->dsts, h_table->num_rows * sizeof(uint64_t));
+  cudaMemcpy(d_table->srcs, h_srcs, h_table->num_rows * sizeof(uint64_t), cudaMemcpyHostToDevice);
+  cudaMemcpy(d_table->dsts, h_dsts, h_table->num_rows * sizeof(uint64_t), cudaMemcpyHostToDevice);
 
-  cudaMemcpy(d_table->srcs, srcs, h_table->num_rows * sizeof(uint64_t), cudaMemcpyHostToDevice);
-  cudaMemcpy(d_table->dsts, dsts, h_table->num_rows * sizeof(uint64_t), cudaMemcpyHostToDevice);
+  cudaMalloc((void**)&d_table->srcs_r, h_table->num_rows * sizeof(uint64_t));
+  cudaMalloc((void**)&d_table->dsts_r, h_table->num_rows * sizeof(uint64_t));
+
 }
 
 

@@ -15,6 +15,8 @@ typedef struct Table {
   uint64_t num_cols;
   uint64_t *srcs;
   uint64_t *dsts;
+  uint64_t *srcs_r;
+  uint64_t *dsts_r;
   uint64_t *table;
 } Table;
 

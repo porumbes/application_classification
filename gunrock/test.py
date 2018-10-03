@@ -117,18 +117,30 @@ for _ in range(num_pv):
     for p_edge_idx, (src, dst) in enumerate(pattern_edges):
         v_fwd[:,p_edge_idx] = mu[:,dst] - fwd_max[:,p_edge_idx]
         v_bak[:,p_edge_idx] = mu[:,src] - bak_max[:,p_edge_idx]
-    
-    e_bak = normprob(v_fwd[data_edges[:,0]] - ce)
-    e_fwd = normprob(v_bak[data_edges[:,0]] - ce)
-    
+        
     v_fwd_max = v_fwd.max(axis=0)
     v_bak_max = v_bak.max(axis=0)
     
-    fwd_max = np.tile(v_bak_max - cnull, num_dv).reshape(num_dv, -1) # num_dv x num_pe
-    bak_max = np.tile(v_fwd_max - cnull, num_dv).reshape(num_dv, -1) # num_dv x num_pe
-    for d_edge_idx, (src, dst) in enumerate(data_edges):
+    e_bak = v_fwd[data_edges[:,0]] - ce
+    e_fwd = v_bak[data_edges[:,0]] - ce
+    e_bak_norm = np.log(np.exp(e_bak).sum(axis=0, keepdims=True))
+    e_fwd_norm = np.log(np.exp(e_fwd).sum(axis=0, keepdims=True))
+    
+    fwd_max = np.zeros((num_dv, num_pe)) - np.inf # num_dv x num_pe
+    bak_max = np.zeros((num_dv, num_pe)) - np.inf # num_dv x num_pe
+    
+    sel = np.argsort(data_edges[:,0],  kind='mergesort')
+    for d_edge_idx, (src, dst) in enumerate(data_edges[sel]):
         bak_max[src] = np.maximum(bak_max[src], e_bak[d_edge_idx])
+    
+    for d_edge_idx, (src, dst) in enumerate(data_edges[sel]):
         fwd_max[dst] = np.maximum(fwd_max[dst], e_fwd[d_edge_idx])
+    
+    fwd_max -= e_fwd_norm
+    bak_max -= e_bak_norm
+    
+    fwd_max = np.maximum(fwd_max, (v_bak_max - cnull).reshape(1, -1))
+    bak_max = np.maximum(bak_max, (v_fwd_max - cnull).reshape(1, -1))
     
     mu = -cv
     for p_edge_idx, (src, dst) in enumerate(pattern_edges):

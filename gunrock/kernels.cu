@@ -191,8 +191,16 @@ void d_Init_CV_MU(Graph* d_Data_Graph, Graph* d_Pattern_Graph, double* d_CV, dou
   double * d_PAttr  = (double *) d_Pattern_Graph->Vtable.table;
 
   int block = 1 + (DV * PV) / THREAD;
-  __pairwiseNorm<<<block, THREAD>>>(DV, PV, AT, d_CV, d_MU, d_PAttr, d_DAttr);
-
+  assert(block * THREAD > DV * PV);
+  __pairwiseNorm<<<block, THREAD>>>(
+    DV,
+    PV,
+    AT,
+    d_CV,
+    d_MU,
+    d_PAttr,
+    d_DAttr
+  );
 }
 
 void d_VFmax_VRmax(Graph * d_Data_Graph, Graph * d_Pattern_Graph,
@@ -204,17 +212,18 @@ void d_VFmax_VRmax(Graph * d_Data_Graph, Graph * d_Pattern_Graph,
   uint64_t block  = 1 + (num_rows * num_cols) / THREAD;
   assert(THREAD * block > num_rows * num_cols);
 
+  // VFMax
   double *d_VFt;
   cudaMalloc((void**)&d_VFt, num_rows * num_cols * sizeof(double));
   __transpose<<<block, THREAD>>>(d_VFt, d_VF, num_rows, num_cols);
   d_rowmax(d_VFmax, d_VFt, num_cols, num_rows);
+  cudaFree(d_VFt);
 
+  // VRmax
   double *d_VRt;
   cudaMalloc((void**)&d_VRt, num_rows * num_cols * sizeof(double));
   __transpose<<<block, THREAD>>>(d_VRt, d_VR, num_rows, num_cols);
   d_rowmax(d_VRmax, d_VRt, num_cols, num_rows);
-
-  cudaFree(d_VFt);
   cudaFree(d_VRt);
 }
 
@@ -465,9 +474,9 @@ void d_UpdateMU(Graph * d_Data_Graph, Graph * d_Pattern_Graph, double * d_CV, do
   void     *d_temp_storage = NULL;
   size_t   temp_storage_bytes = 0;
 
-  uint64_t DV   = d_Data_Graph->num_vertices;
-  uint64_t PV   = d_Pattern_Graph->num_vertices;
-  uint64_t PE   = d_Pattern_Graph->num_edges;
+  uint64_t DV = d_Data_Graph->num_vertices;
+  uint64_t PV = d_Pattern_Graph->num_vertices;
+  uint64_t PE = d_Pattern_Graph->num_edges;
 
   // --------------------------------------------
   // MU = -CV
