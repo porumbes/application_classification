@@ -5,6 +5,8 @@
 
 #define THREAD 1024
 
+namespace ac {
+
 // --
 // Kernels
 
@@ -50,7 +52,7 @@ __global__ void __rowSubLog(FloatT* d_x, IntT num_rows, IntT num_cols, FloatT* c
 }
 
 
-void d_rowmax(FloatT * d_out, FloatT * d_in, IntT num_rows, IntT num_cols) {
+void rowmax(FloatT * d_out, FloatT * d_in, IntT num_rows, IntT num_cols) {
   void *d_temp_storage = NULL;
   size_t temp_storage_bytes = 0;
 
@@ -88,7 +90,7 @@ void d_rowmax(FloatT * d_out, FloatT * d_in, IntT num_rows, IntT num_cols) {
   cudaFree(d_temp_storage);
 }
 
-void d_rowsum(FloatT * d_out, FloatT * d_in, IntT num_rows, IntT num_cols) {
+void rowsum(FloatT * d_out, FloatT * d_in, IntT num_rows, IntT num_cols) {
   void *d_temp_storage = NULL;
   size_t temp_storage_bytes = 0;
 
@@ -125,9 +127,9 @@ void d_rowsum(FloatT * d_out, FloatT * d_in, IntT num_rows, IntT num_cols) {
   cudaFree(d_offsets);
 }
 
-// ================ Specific ===============
+// ================ Application Classification Specific ===============
 
-__global__ void __pairwiseNorm(
+__global__ void __NodePairwiseNorm(
   int DV,
   int PV,
   FloatT* CV,
@@ -140,60 +142,39 @@ __global__ void __pairwiseNorm(
   if(k < DV * PV) {
       IntT i = k / PV;
       IntT j = k % PV;
-      FloatT tmp = d_norm_2(
+      FloatT dist = d_norm_2(
         node_feat_dim,
         patt_node_feats + j * node_feat_dim,
         data_node_feats + i * node_feat_dim
       );
-      CV[k] = tmp;
-      MU[k] = -tmp;
+
+      CV[k] = dist;
+      MU[k] = -dist;
   }
 }
 
-void d_Init_CV_MU(Graph* d_data_graph, Graph* d_patt_graph, FloatT* d_CV, FloatT* d_MU) {
-  IntT DV = d_data_graph->num_nodes;
-  IntT PV = d_patt_graph->num_nodes;
+void Init_CV_MU(Graph* data, Graph* patt, FloatT* d_CV, FloatT* d_MU) {
+  // Compute pairwise distance between `data` and `patt` features
+
+  IntT DV = data->num_nodes;
+  IntT PV = patt->num_nodes;
 
   int block = 1 + (DV * PV) / THREAD;
   assert(block * THREAD > DV * PV);
-  __pairwiseNorm<<<block, THREAD>>>(
+  __NodePairwiseNorm<<<block, THREAD>>>(
     DV,
     PV,
     d_CV,
     d_MU,
-    d_data_graph->node_feats,
-    d_patt_graph->node_feats,
-    d_data_graph->node_feat_dim
+    data->node_feats,
+    patt->node_feats,
+    data->node_feat_dim
   );
 }
 
-void d_VFmax_VRmax(Graph * d_data_graph, Graph * d_patt_graph,
-                 FloatT * d_VF, FloatT * d_VR, FloatT * d_VFmax, FloatT * d_VRmax) {
 
-  IntT num_rows = d_data_graph->num_nodes; // DV
-  IntT num_cols = d_patt_graph->num_edges; // PE
-
-  IntT block  = 1 + (num_rows * num_cols) / THREAD;
-  assert(THREAD * block > num_rows * num_cols);
-
-  // VFMax
-  FloatT *d_VFt;
-  cudaMalloc((void**)&d_VFt, num_rows * num_cols * sizeof(FloatT));
-  __transpose<<<block, THREAD>>>(d_VFt, d_VF, num_rows, num_cols);
-  d_rowmax(d_VFmax, d_VFt, num_cols, num_rows);
-  cudaFree(d_VFt);
-
-  // VRmax
-  FloatT *d_VRt;
-  cudaMalloc((void**)&d_VRt, num_rows * num_cols * sizeof(FloatT));
-  __transpose<<<block, THREAD>>>(d_VRt, d_VR, num_rows, num_cols);
-  d_rowmax(d_VRmax, d_VRt, num_cols, num_rows);
-  cudaFree(d_VRt);
-}
-
-
-
-void d_NormProb(const IntT num_rows, const IntT num_cols, FloatT *d_x) {
+void ColumnSoftmax(const IntT num_rows, const IntT num_cols, FloatT *d_x) {
+  // Compute softmax over columns
 
   // --------------------------
   // Prep
@@ -210,7 +191,7 @@ void d_NormProb(const IntT num_rows, const IntT num_cols, FloatT *d_x) {
   FloatT *d_xt;
   cudaMalloc((void**)&d_xt, num_rows * num_cols * sizeof(FloatT));
   __transpose<<<block, THREAD>>>(d_xt, d_x, num_rows, num_cols);
-  d_rowmax(d_storage, d_xt, num_cols, num_rows);
+  rowmax(d_storage, d_xt, num_cols, num_rows);
 
   // --------------------------------
   // Subtract max from columns
@@ -221,7 +202,7 @@ void d_NormProb(const IntT num_rows, const IntT num_cols, FloatT *d_x) {
   // Sum columns
 
   cudaMemset(d_storage, 0, num_cols * sizeof(FloatT));
-  d_rowsum(d_storage, d_xt, num_cols, num_rows);
+  rowsum(d_storage, d_xt, num_cols, num_rows);
 
   // ---------------------------------
   // Subtract log-sum from columns
@@ -241,16 +222,15 @@ void d_NormProb(const IntT num_rows, const IntT num_cols, FloatT *d_x) {
 }
 
 
-
-__global__ void __d_Init_VR_VF(
+__global__ void __RepeatColumnsByEdges(
   const IntT DV,
   const IntT PE,
   const IntT PV,
   FloatT * MU,
   FloatT * VR,
   FloatT * VF,
-  IntT * srcs,
-  IntT * dsts
+  IntT * patt_srcs,
+  IntT * patt_dsts
 )
 {
   IntT k = threadIdx.x + blockDim.x * blockIdx.x;
@@ -258,33 +238,36 @@ __global__ void __d_Init_VR_VF(
   if(k < DV * PE) {
     IntT i = k / PE;
     IntT j = k % PE;
-    VR[k] = MU[i * PV + srcs[j]];
-    VF[k] = MU[i * PV + dsts[j]];
+    VR[k] = MU[i * PV + patt_srcs[j]];
+    VF[k] = MU[i * PV + patt_dsts[j]];
   }
 }
 
-void d_Init_VR_VF(Graph * d_data_graph, Graph * d_patt_graph, FloatT * MU, FloatT * VR, FloatT * VF) {
-  const IntT DV  = d_data_graph->num_nodes;
-  const IntT PV  = d_patt_graph->num_nodes;
-  const IntT PE  = d_patt_graph->num_edges;
+void Init_VR_VF(Graph * patt, IntT DV, FloatT * MU, FloatT * VR, FloatT * VF) {
+  // Replicate columns of MU by pattern edges
+  // MU: DV x PV
+  // V*: DV x PE
+
+  const IntT PV = patt->num_nodes;
+  const IntT PE = patt->num_edges;
 
   IntT block_dv_pe = 1 + (DV * PE) / THREAD;
   assert(THREAD * block_dv_pe > DV * PE);
-  __d_Init_VR_VF<<<block_dv_pe, THREAD>>>(
+  __RepeatColumnsByEdges<<<block_dv_pe, THREAD>>>(
     DV,
     PE,
     PV,
     MU,
     VR,
     VF,
-    d_patt_graph->srcs,
-    d_patt_graph->dsts
+    patt->srcs,
+    patt->dsts
   );
 }
 
 
 // edge-edge distance table
-__global__ void __d_Init_CE_RE_FE(
+__global__ void __EdgePairwiseNorm(
   IntT DE,
   IntT PE,
   FloatT * CE,
@@ -300,39 +283,61 @@ __global__ void __d_Init_CE_RE_FE(
   if(k < DE * PE) {
     IntT i = k / PE;
     IntT j = k % PE;
-    FloatT tmp = d_norm_2(
+    FloatT dist = d_norm_2(
       edge_feat_dim,
       patt_edge_feats + j * edge_feat_dim,
       data_edge_feats + i * edge_feat_dim
     );
-    CE[k] = tmp;
-    RE[k] = - CE[k];
-    FE[k] = - CE[k];
+
+    CE[k] = dist;
+    RE[k] = - dist;
+    FE[k] = - dist;
   }
 }
 
-void d_Init_CE_RE_FE(Graph * d_data_graph, Graph * d_patt_graph, FloatT * d_CE, FloatT * d_RE, FloatT * d_FE) {
+void Init_CE_RE_FE(Graph * data, Graph * patt, FloatT * d_CE, FloatT * d_RE, FloatT * d_FE) {
 
-  IntT DE = d_data_graph->num_edges;
-  IntT PE = d_patt_graph->num_edges;
+  IntT DE = data->num_edges;
+  IntT PE = patt->num_edges;
 
   IntT block_de_pe  = 1 + (DE * PE) / THREAD;
   assert(THREAD * block_de_pe > DE * PE);
-  __d_Init_CE_RE_FE<<<block_de_pe, THREAD>>>(
+  __EdgePairwiseNorm<<<block_de_pe, THREAD>>>(
     DE,
     PE,
     d_CE,
     d_RE,
     d_FE,
-    d_data_graph->edge_feats,
-    d_patt_graph->edge_feats,
-    d_data_graph->edge_feat_dim
+    data->edge_feats,
+    patt->edge_feats,
+    data->edge_feat_dim
   );
 }
 
 
+void VFmax_VRmax(IntT num_rows, IntT num_cols, FloatT * d_VF, FloatT * d_VR, FloatT * d_VFmax, FloatT * d_VRmax) {
+  // Compute maximum over columns of d_V{F,R}
 
-__global__ void __d_VF_VR(
+  IntT block = 1 + (num_rows * num_cols) / THREAD;
+  assert(THREAD * block > num_rows * num_cols);
+
+  // VFMax
+  FloatT *d_VFt;
+  cudaMalloc((void**)&d_VFt, num_rows * num_cols * sizeof(FloatT));
+  __transpose<<<block, THREAD>>>(d_VFt, d_VF, num_rows, num_cols);
+  rowmax(d_VFmax, d_VFt, num_cols, num_rows);
+  cudaFree(d_VFt);
+
+  // VRmax
+  FloatT *d_VRt;
+  cudaMalloc((void**)&d_VRt, num_rows * num_cols * sizeof(FloatT));
+  __transpose<<<block, THREAD>>>(d_VRt, d_VR, num_rows, num_cols);
+  rowmax(d_VRmax, d_VRt, num_cols, num_rows);
+  cudaFree(d_VRt);
+}
+
+
+__global__ void __SubRepeatColumnsByEdges(
   IntT DV,
   IntT PE,
   IntT PV,
@@ -355,16 +360,15 @@ __global__ void __d_VF_VR(
   }
 }
 
-void d_VF_VR(Graph * d_data_graph, Graph * d_patt_graph,
+void VF_VR(Graph * patt, IntT DV,
            FloatT * d_MU, FloatT * d_FMax, FloatT * d_RMax, FloatT * d_VF, FloatT * d_VR) {
 
-  IntT DV = d_data_graph->num_nodes;
-  IntT PV = d_patt_graph->num_nodes;
-  IntT PE = d_patt_graph->num_edges;
+  IntT PV = patt->num_nodes;
+  IntT PE = patt->num_edges;
 
   IntT block_dv_pe = 1 + (DV * PE) / THREAD;
   assert(THREAD * block_dv_pe > DV * PE);
-  __d_VF_VR<<<block_dv_pe, THREAD>>>(
+  __SubRepeatColumnsByEdges<<<block_dv_pe, THREAD>>>(
     DV,
     PE,
     PV,
@@ -373,8 +377,8 @@ void d_VF_VR(Graph * d_data_graph, Graph * d_patt_graph,
     d_VF,
     d_FMax,
     d_RMax,
-    d_patt_graph->srcs,
-    d_patt_graph->dsts
+    patt->srcs,
+    patt->dsts
   );
 }
 
@@ -414,36 +418,12 @@ __global__ void __tileMax(FloatT * d_out, FloatT * d_in, IntT num_in, IntT num_o
     d_out[i] = max(d_out[i], d_in[i % num_in]);
 }
 
-__global__ void __MU(
-  IntT DV,
-  IntT PV,
-  IntT PE,
-  IntT AT,
-  IntT * srcs,
-  IntT * dsts,
-  FloatT * FMax,
-  FloatT * RMax,
-  FloatT * MU
-)
-{
-  // Sum reduce columns of FMax/RMax by key
-  // Some of the keys are sequential, some are not
-  IntT k = threadIdx.x + blockDim.x * blockIdx.x;
-  if(k < DV * PE) {
-    IntT i = k / PE;
-    IntT j = k % PE;
-    atomicAdd(&MU[i * PV + dsts[j]], FMax[k]);
-    atomicAdd(&MU[i * PV + srcs[j]], RMax[k]);
-  }
-}
-
-void d_UpdateMU(Graph * d_data_graph, Graph * d_patt_graph, FloatT * d_CV, FloatT * d_FMax, FloatT * d_RMax, FloatT * d_MU) {
+void UpdateMU(Graph * patt, IntT DV, FloatT * d_CV, FloatT * d_FMax, FloatT * d_RMax, FloatT * d_MU) {
   void     *d_temp_storage = NULL;
   size_t   temp_storage_bytes = 0;
 
-  IntT DV = d_data_graph->num_nodes;
-  IntT PV = d_patt_graph->num_nodes;
-  IntT PE = d_patt_graph->num_edges;
+  IntT PV = patt->num_nodes;
+  IntT PE = patt->num_edges;
 
   // --------------------------------------------
   // MU = -CV
@@ -460,7 +440,7 @@ void d_UpdateMU(Graph * d_data_graph, Graph * d_patt_graph, FloatT * d_CV, Float
 
   IntT block_dv_pe = 1 + (DV * PE) / THREAD;
   assert(THREAD * block_dv_pe > DV * PE);
-  __tileVector<<<block_dv_pe, THREAD>>>(d_tiled_srcs, d_patt_graph->srcs, PE, DV * PE);
+  __tileVector<<<block_dv_pe, THREAD>>>(d_tiled_srcs, patt->srcs, PE, DV * PE);
 
   // --------------------------------------------
   // Sum over rows of matrix
@@ -492,7 +472,7 @@ void d_UpdateMU(Graph * d_data_graph, Graph * d_patt_graph, FloatT * d_CV, Float
   IntT *d_tiled_dsts;
   cudaMalloc((void**)&d_tiled_dsts, DV * PE * sizeof(IntT));
   cudaMemset(d_tiled_dsts, 0, DV * PE * sizeof(IntT));
-  __tileVectorOffset<<<block_dv_pe, THREAD>>>(d_tiled_dsts, d_patt_graph->dsts, PE, PV, DV * PE);
+  __tileVectorOffset<<<block_dv_pe, THREAD>>>(d_tiled_dsts, patt->dsts, PE, PV, DV * PE);
 
   // --------------------------------------
   // Sort keys + values (should be precomputing)
@@ -538,7 +518,7 @@ void d_UpdateMU(Graph * d_data_graph, Graph * d_patt_graph, FloatT * d_CV, Float
   cudaFree(d_values_tmp);
 }
 
-__global__ void __d_FE_RE(
+__global__ void __FE_RE(
   IntT DE,
   IntT PE,
   FloatT * CE,
@@ -554,19 +534,20 @@ __global__ void __d_FE_RE(
     IntT ij  = k / PE;
     IntT km  = k % PE;
     IntT src = srcs[ij];
-    FE[k] = - CE[k] + VR[src * PE + km];
-    RE[k] = - CE[k] + VF[src * PE + km];
+
+    FloatT CE_k = CE[k];
+    FE[k] = - CE_k + VR[src * PE + km];
+    RE[k] = - CE_k + VF[src * PE + km];
   }
 }
 
-void d_FE_RE(Graph * d_data_graph, Graph * d_patt_graph, FloatT * d_CE, FloatT * d_VF, FloatT * d_VR, FloatT * d_FE, FloatT * d_RE) {
+void FE_RE(Graph * data, IntT PE, FloatT * d_CE, FloatT * d_VF, FloatT * d_VR, FloatT * d_FE, FloatT * d_RE) {
 
-  IntT DE = d_data_graph->num_edges;
-  IntT PE = d_patt_graph->num_edges;
+  IntT DE = data->num_edges;
 
   IntT block = 1 + (DE * PE) / THREAD;
   assert(THREAD * block > DE * PE);
-  __d_FE_RE<<<block, THREAD>>>(
+  __FE_RE<<<block, THREAD>>>(
     DE,
     PE,
     d_CE,
@@ -574,17 +555,16 @@ void d_FE_RE(Graph * d_data_graph, Graph * d_patt_graph, FloatT * d_CE, FloatT *
     d_VF,
     d_FE,
     d_RE,
-    d_data_graph->srcs
+    data->srcs
   );
 }
 
-void d_RMax(Graph * d_data_graph, Graph * d_patt_graph, FloatT * d_Cnull, FloatT * d_VFmax, FloatT * d_RE, FloatT * d_RMax) {
+void RMax(Graph * data, IntT PE, FloatT * d_Cnull, FloatT * d_VFmax, FloatT * d_RE, FloatT * d_RMax) {
   void     *d_temp_storage = NULL;
   size_t   temp_storage_bytes = 0;
 
-  IntT DV = d_data_graph->num_nodes;
-  IntT DE = d_data_graph->num_edges;
-  IntT PE = d_patt_graph->num_edges;
+  IntT DV = data->num_nodes;
+  IntT DE = data->num_edges;
 
   // --------------------------------------
   // Transpose
@@ -602,7 +582,7 @@ void d_RMax(Graph * d_data_graph, Graph * d_patt_graph, FloatT * d_Cnull, FloatT
   IntT *d_tiled_srcs;
   cudaMalloc((void**)&d_tiled_srcs, DE * PE * sizeof(IntT));
   cudaMemset(d_tiled_srcs, 0, DE * PE * sizeof(IntT));
-  __tileVector<<<block_de_pe, THREAD>>>(d_tiled_srcs, d_data_graph->srcs, DE, DE * PE);
+  __tileVector<<<block_de_pe, THREAD>>>(d_tiled_srcs, data->srcs, DE, DE * PE);
 
   // --------------------------------------
   // Max reduce rows of transposed matrix
@@ -646,13 +626,12 @@ void d_RMax(Graph * d_data_graph, Graph * d_patt_graph, FloatT * d_Cnull, FloatT
 }
 
 
-void d_FMax(Graph* d_data_graph, Graph* d_patt_graph, FloatT* d_Cnull, FloatT* d_VRmax, FloatT* d_FE, FloatT* d_FMax) {
+void FMax(Graph* data, IntT PE, FloatT* d_Cnull, FloatT* d_VRmax, FloatT* d_FE, FloatT* d_FMax) {
   void     *d_temp_storage = NULL;
   size_t   temp_storage_bytes = 0;
 
-  IntT DV = d_data_graph->num_nodes;
-  IntT DE = d_data_graph->num_edges;
-  IntT PE = d_patt_graph->num_edges;
+  IntT DV = data->num_nodes;
+  IntT DE = data->num_edges;
 
   // --------------------------------------
   // Transpose
@@ -669,7 +648,7 @@ void d_FMax(Graph* d_data_graph, Graph* d_patt_graph, FloatT* d_Cnull, FloatT* d
   IntT *d_tiled_dsts;
   cudaMalloc((void**)&d_tiled_dsts, DE * PE * sizeof(IntT));
   cudaMemset(d_tiled_dsts, 0, DE * PE * sizeof(IntT));
-  __tileVectorOffset<<<block_de_pe, THREAD>>>(d_tiled_dsts, d_data_graph->dsts, DE, DV, DE * PE);
+  __tileVectorOffset<<<block_de_pe, THREAD>>>(d_tiled_dsts, data->dsts, DE, DV, DE * PE);
 
   // --------------------------------------
   // Sort keys + values (should be precomputing)
@@ -728,3 +707,4 @@ void d_FMax(Graph* d_data_graph, Graph* d_patt_graph, FloatT* d_Cnull, FloatT* d
   cudaFree(d_num_runs_out);
 }
 
+}

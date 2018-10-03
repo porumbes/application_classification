@@ -28,22 +28,20 @@ typedef struct Graph {
   IntT* dsts_flipped;
 } Graph;
 
-typedef struct WorkArrays {
-  FloatT* CV;
-  FloatT* CE;
-  FloatT* Cnull;
-  FloatT* MU;
-  FloatT* RE;
-  FloatT* FE;
-  FloatT* VR;
-  FloatT* VF;
-  FloatT* VRmax;
-  FloatT* VFmax;
-  FloatT* RMax;
-  FloatT* FMax;
-} WorkArrays;
 
-void initializeWorkArrays(Graph *, Graph *, WorkArrays&);
-void run_iteration(Graph *, Graph *, WorkArrays&);
+namespace ac {
+  void ColumnSoftmax(IntT, IntT, FloatT*);
+
+  void Init_CV_MU(Graph*, Graph*, FloatT*, FloatT*);
+  void Init_CE_RE_FE(Graph*, Graph*, FloatT*, FloatT*, FloatT*);
+
+  void Init_VR_VF(Graph*, IntT, FloatT*, FloatT*, FloatT*);
+  void VFmax_VRmax(IntT, IntT, FloatT*, FloatT*, FloatT*, FloatT*);
+  void VF_VR(Graph*, IntT, FloatT*, FloatT*, FloatT*, FloatT*, FloatT*);
+  void UpdateMU(Graph*, IntT, FloatT*, FloatT*, FloatT*, FloatT*);
+  void FE_RE(Graph *, IntT, FloatT*, FloatT*, FloatT*, FloatT*, FloatT*);
+  void FMax(Graph *, IntT, FloatT*, FloatT*, FloatT*, FloatT*);
+  void RMax(Graph *, IntT, FloatT*, FloatT*, FloatT*, FloatT*);
+}
 
 #endif

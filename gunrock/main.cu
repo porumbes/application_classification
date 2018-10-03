@@ -3,7 +3,6 @@
 
 #include <iostream>
 #include "main.h"
-#include "kernels.cuh"
 #include "assert.h"
 
 void loadGraph(char * node_filename, char * edge_filename, Graph* d_graph) {
@@ -81,75 +80,120 @@ int main ( int argc, char * argv[] ) {
   char* patt_node_path = argv[4];
   char* patt_edge_path = argv[5];
 
-  Graph d_data_graph;
-  loadGraph(data_node_path, data_edge_path, &d_data_graph);
+  Graph data;
+  loadGraph(data_node_path, data_edge_path, &data);
 
-  Graph d_patt_graph;
-  loadGraph(patt_node_path, patt_edge_path, &d_patt_graph);
-
-  const IntT DV = d_data_graph.num_nodes;
-  const IntT DE = d_data_graph.num_edges;
-  const IntT PV = d_patt_graph.num_nodes;
-  const IntT PE = d_patt_graph.num_edges;
+  Graph patt;
+  loadGraph(patt_node_path, patt_edge_path, &patt);
 
   // --
-  // Allocation
+  // Allocate memory
 
-  WorkArrays d_WA;
-  cudaMalloc((void **)&d_WA.CV,    DV * PV * sizeof(FloatT));
-  cudaMalloc((void **)&d_WA.CE,    DE * PE * sizeof(FloatT));
-  cudaMalloc((void **)&d_WA.Cnull, PE *      sizeof(FloatT));
-  cudaMalloc((void **)&d_WA.MU,    DV * PV * sizeof(FloatT));
-  cudaMalloc((void **)&d_WA.RE,    DE * PE * sizeof(FloatT));
-  cudaMalloc((void **)&d_WA.FE,    DE * PE * sizeof(FloatT));
-  cudaMalloc((void **)&d_WA.VR,    DV * PE * sizeof(FloatT));
-  cudaMalloc((void **)&d_WA.VF,    DV * PE * sizeof(FloatT));
-  cudaMalloc((void **)&d_WA.VRmax, PE *      sizeof(FloatT));
-  cudaMalloc((void **)&d_WA.VFmax, PE *      sizeof(FloatT));
-  cudaMalloc((void **)&d_WA.RMax,  DV * PE * sizeof(FloatT));
-  cudaMalloc((void **)&d_WA.FMax,  DV * PE * sizeof(FloatT));
+  FloatT *CV,
+         *CE,
+         *Cnull,
+         *MU,
+         *RE,
+         *FE,
+         *VR,
+         *VF,
+         *VRmax,
+         *VFmax,
+         *RMax,
+         *FMax;
+
+  cudaMalloc((void **)&CV,    data.num_nodes * patt.num_nodes * sizeof(FloatT));
+  cudaMalloc((void **)&CE,    data.num_edges * patt.num_edges * sizeof(FloatT));
+  cudaMalloc((void **)&Cnull, patt.num_edges *                  sizeof(FloatT));
+  cudaMalloc((void **)&MU,    data.num_nodes * patt.num_nodes * sizeof(FloatT));
+  cudaMalloc((void **)&RE,    data.num_edges * patt.num_edges * sizeof(FloatT));
+  cudaMalloc((void **)&FE,    data.num_edges * patt.num_edges * sizeof(FloatT));
+  cudaMalloc((void **)&VR,    data.num_nodes * patt.num_edges * sizeof(FloatT));
+  cudaMalloc((void **)&VF,    data.num_nodes * patt.num_edges * sizeof(FloatT));
+  cudaMalloc((void **)&VRmax, patt.num_edges *                  sizeof(FloatT));
+  cudaMalloc((void **)&VFmax, patt.num_edges *                  sizeof(FloatT));
+  cudaMalloc((void **)&RMax,  data.num_nodes * patt.num_edges * sizeof(FloatT));
+  cudaMalloc((void **)&FMax,  data.num_nodes * patt.num_edges * sizeof(FloatT));
 
   // --
-  // Initialization
+  // Initialize algorithm
 
-  d_Init_CV_MU(&d_data_graph, &d_patt_graph, d_WA.CV, d_WA.MU);
-  d_NormProb(DV, PV, d_WA.CV);
-  d_NormProb(DV, PV, d_WA.MU);
-  d_Init_VR_VF(&d_data_graph, &d_patt_graph, d_WA.MU, d_WA.VR, d_WA.VF);
-  d_Init_CE_RE_FE(&d_data_graph, &d_patt_graph, d_WA.CE, d_WA.RE, d_WA.FE);
-  d_NormProb(DE, PE, d_WA.CE);
-  d_NormProb(DE, PE, d_WA.RE);
-  d_NormProb(DE, PE, d_WA.FE);
-  cudaMemset(d_WA.Cnull, 0, PE * sizeof(FloatT));
-  d_VFmax_VRmax(&d_data_graph, &d_patt_graph, d_WA.VF, d_WA.VR, d_WA.VFmax, d_WA.VRmax);
-  d_FMax(&d_data_graph, &d_patt_graph, d_WA.Cnull, d_WA.VRmax, d_WA.FE, d_WA.FMax);
-  d_RMax(&d_data_graph, &d_patt_graph, d_WA.Cnull, d_WA.VFmax, d_WA.RE, d_WA.RMax);
+  // Node-node distance matrix
+  ac::Init_CV_MU(&data, &patt, CV, MU);
+
+  // Edge-edge distance matrix
+  ac::Init_CE_RE_FE(&data, &patt, CE, RE, FE);
+
+  // Normalize distance matrices (could all happen in parallel)
+  ac::ColumnSoftmax(data.num_nodes, patt.num_nodes, CV);
+  ac::ColumnSoftmax(data.num_nodes, patt.num_nodes, MU);
+  ac::ColumnSoftmax(data.num_edges, patt.num_edges, CE);
+  ac::ColumnSoftmax(data.num_edges, patt.num_edges, RE);
+  ac::ColumnSoftmax(data.num_edges, patt.num_edges, FE);
+
+  // Repeat columns of MU by pattern edgelist
+  ac::Init_VR_VF(&patt, data.num_nodes, MU, VR, VF);
+
+  // Hardcode to 0
+  cudaMemset(Cnull, 0, patt.num_edges * sizeof(FloatT));
+
+  // Compute max over columns of VF/VR
+  ac::VFmax_VRmax(data.num_nodes, patt.num_edges, VF, VR, VFmax, VRmax);
+
+  // Max reduce over edges adjacent to data nodes
+  ac::FMax(&data, patt.num_edges, Cnull, VRmax, FE, FMax);
+  ac::RMax(&data, patt.num_edges, Cnull, VFmax, RE, RMax);
 
   // --
   // Run
 
-  for (IntT i = 0; i < PV; i++) {
-    d_VF_VR(&d_data_graph, &d_patt_graph, d_WA.MU, d_WA.FMax, d_WA.RMax, d_WA.VF, d_WA.VR);
-    d_VFmax_VRmax(&d_data_graph, &d_patt_graph, d_WA.VF, d_WA.VR, d_WA.VFmax, d_WA.VRmax);
-    d_FE_RE(&d_data_graph, &d_patt_graph, d_WA.CE, d_WA.VF, d_WA.VR, d_WA.FE, d_WA.RE);
-    d_NormProb(DE, PE, d_WA.FE);
-    d_NormProb(DE, PE, d_WA.RE);
+  for (IntT i = 0; i < patt.num_nodes; i++) {
+    // Repeat columns of (MU - FMax) by pattern edgelist
+    ac::VF_VR(&patt, data.num_nodes, MU, FMax, RMax, VF, VR);
 
-    d_FMax(&d_data_graph, &d_patt_graph, d_WA.Cnull, d_WA.VRmax, d_WA.FE, d_WA.FMax);
-    d_RMax(&d_data_graph, &d_patt_graph, d_WA.Cnull, d_WA.VFmax, d_WA.RE, d_WA.RMax);
-    d_UpdateMU(&d_data_graph, &d_patt_graph, d_WA.CV, d_WA.FMax, d_WA.RMax, d_WA.MU);
-    d_NormProb(DV, PV, d_WA.MU);
+    // Compute max over columns of VF/VR
+    ac::VFmax_VRmax(data.num_nodes, patt.num_edges, VF, VR, VFmax, VRmax);
+
+    ac::FE_RE(&data, patt.num_edges, CE, VF, VR, FE, RE);
+    ac::ColumnSoftmax(data.num_edges, patt.num_edges, FE);
+    ac::ColumnSoftmax(data.num_edges, patt.num_edges, RE);
+
+    // Max aggregation over edges adjacent to data nodes
+    ac::FMax(&data, patt.num_edges, Cnull, VRmax, FE, FMax);
+    ac::RMax(&data, patt.num_edges, Cnull, VFmax, RE, RMax);
+
+    // Sum reduce over edges adjacent to pattern nodes
+    ac::UpdateMU(&patt, data.num_nodes, CV, FMax, RMax, MU);
+    ac::ColumnSoftmax(data.num_nodes, patt.num_nodes, MU);
   }
 
   // --
   // Copy results to host and print
 
-  FloatT *h_MU = (FloatT *) malloc(DV * PV * sizeof(FloatT));
-  cudaMemcpy(h_MU, d_WA.MU, DV * PV * sizeof(FloatT), cudaMemcpyDeviceToHost);
+  FloatT *h_MU = (FloatT *) malloc(data.num_nodes * patt.num_nodes * sizeof(FloatT));
+  cudaMemcpy(h_MU, MU, data.num_nodes * patt.num_nodes * sizeof(FloatT), cudaMemcpyDeviceToHost);
 
-  for (IntT i = 0; i < DV * PV; i ++) {
+  for (IntT i = 0; i < data.num_nodes * patt.num_nodes; i ++) {
     printf("%e\n", h_MU[i]);
   }
+
+  // --
+  // Free memory
+
+  cudaFree(CV);
+  cudaFree(CE);
+  cudaFree(Cnull);
+  cudaFree(MU);
+  cudaFree(RE);
+  cudaFree(FE);
+  cudaFree(VR);
+  cudaFree(VF);
+  cudaFree(VRmax);
+  cudaFree(VFmax);
+  cudaFree(RMax);
+  cudaFree(FMax);
+  free(h_MU);
+
   return 0;
 }
 
