@@ -46,23 +46,25 @@ void sort_edges(IntT* srcs, IntT* dsts, IntT* srcs_r, IntT* dsts_r, IntT* map_r,
 // --
 // Kernels
 
-// __global__ FloatT norm_1(int ATtr, FloatT * vec1) {
-//   FloatT sum = 0.0;
-//   for (int i = 0; i < ATtr; i ++) {
-//     sum += (vec1[i] * vec1[i]);
-//   }
-//   return sqrt(sum);
-// }
-
-__device__ FloatT d_norm_2(int ATtr, FloatT * vec1, FloatT * vec2) {
+__device__ FloatT d_norm_2(FloatT * vec1, FloatT * vec2, IntT n) {
+  // Euclidean distance between vectors
   FloatT sum = 0.0;
-  for (int i = 0; i < ATtr; i ++) {
+  for (int i = 0; i < n; i ++) {
     sum += (vec1[i] - vec2[i]) * (vec1[i] - vec2[i]);
   }
   return sqrt(sum);
 }
 
+__global__ void __fillLow(FloatT *d_x, IntT n) {
+  // Fill array w/ min value
+  IntT offset = threadIdx.x + blockDim.x * blockIdx.x;
+  if(offset < n) {
+    d_x[offset] = -DBL_MAX;
+  }
+}
+
 __global__ void __transpose(FloatT *d_xt, FloatT *d_x, IntT num_rows, IntT num_cols) {
+  // Transpose matrix
   IntT offset = threadIdx.x + blockDim.x * blockIdx.x;
   if(offset < num_rows * num_cols) {
     IntT row = offset / num_cols;
@@ -71,16 +73,9 @@ __global__ void __transpose(FloatT *d_xt, FloatT *d_x, IntT num_rows, IntT num_c
   }
 }
 
-__global__ void __fillLow(FloatT *d_x, IntT n) {
-  IntT offset = threadIdx.x + blockDim.x * blockIdx.x;
-  if(offset < n) {
-    d_x[offset] = -DBL_MAX;
-  }
-}
-
 __global__ void __transposeWithKey(FloatT *d_xt, FloatT *d_x, IntT *d_idx, IntT* num_entries, IntT num_rows, IntT num_cols) {
+  // Transpose matrix, when not all values are defined
   IntT offset = threadIdx.x + blockDim.x * blockIdx.x;
-  // Fill entries
   if(offset < num_entries[0]) {
     IntT offset_t = d_idx[offset];
     IntT row  = offset_t / num_cols;
@@ -89,10 +84,10 @@ __global__ void __transposeWithKey(FloatT *d_xt, FloatT *d_x, IntT *d_idx, IntT*
   }
 }
 
-__global__ void __tileMax(FloatT * d_out, FloatT * d_in, IntT num_in, IntT num_out) {
+__global__ void __maxMatrixRowVector(FloatT * d_matrix, FloatT * d_vec, IntT num_cols, IntT n) {
   IntT i = threadIdx.x + blockDim.x * blockIdx.x;
-  if(i < num_out) {
-    d_out[i] = max(d_out[i], d_in[i % num_in]);
+  if(i < n) {
+    d_matrix[i] = max(d_matrix[i], d_vec[i % num_cols]);
   }
 }
 
@@ -112,8 +107,38 @@ __global__ void __rowSubLog(FloatT* d_x, IntT num_rows, IntT num_cols, FloatT* c
   }
 }
 
+__global__ void __scalarMultiply(FloatT * d_out, FloatT * d_in, FloatT alpha, IntT n) {
+  IntT i = threadIdx.x + blockDim.x * blockIdx.x;
+  if(i < n)
+    d_out[i] = alpha * d_in[i];
+}
+
+__global__ void __tileVectorWithOffset(IntT * d_out, IntT * d_in, IntT num_in, IntT num_uin, IntT num_out) {
+  IntT i = threadIdx.x + blockDim.x * blockIdx.x;
+  if(i < num_out)
+    d_out[i] = num_uin * (i / num_in) + d_in[i % num_in];
+}
+
+__global__ void __vectorScatterAdd(FloatT * d_out, IntT * d_key_in, FloatT * d_value_in, IntT * n) {
+  IntT i = threadIdx.x + blockDim.x * blockIdx.x;
+  if(i < n[0])
+    d_out[d_key_in[i]] += d_value_in[i];
+}
+
+__global__ void __reorderEdges(FloatT* d_out, FloatT* d_in, IntT* d_map_r, IntT num_in, IntT num_out) {
+  IntT i = threadIdx.x + blockDim.x * blockIdx.x;
+  if(i < num_out) {
+    IntT col = i % num_in;
+    IntT row = i / num_in;
+    d_out[i] = d_in[row * num_in + d_map_r[col]];
+  }
+}
+
+
 
 void rowmax(FloatT * d_out, FloatT * d_in, IntT num_rows, IntT num_cols) {
+  // Max over rows of matrix
+
   void *d_temp_storage = NULL;
   size_t temp_storage_bytes = 0;
 
@@ -152,6 +177,8 @@ void rowmax(FloatT * d_out, FloatT * d_in, IntT num_rows, IntT num_cols) {
 }
 
 void rowsum(FloatT * d_out, FloatT * d_in, IntT num_rows, IntT num_cols) {
+  // Sum over rows of matrix
+
   void *d_temp_storage = NULL;
   size_t temp_storage_bytes = 0;
 
@@ -204,9 +231,9 @@ __global__ void __NodePairwiseNorm(
       IntT i = k / PV;
       IntT j = k % PV;
       FloatT dist = d_norm_2(
-        node_feat_dim,
         patt_node_feats + j * node_feat_dim,
-        data_node_feats + i * node_feat_dim
+        data_node_feats + i * node_feat_dim,
+        node_feat_dim
       );
 
       CV[k] = dist;
@@ -306,8 +333,6 @@ __global__ void __RepeatColumnsByEdges(
 
 void Init_VR_VF(Graph * patt, IntT DV, FloatT * MU, FloatT * VR, FloatT * VF) {
   // Replicate columns of MU by pattern edges
-  // MU: DV x PV
-  // V*: DV x PE
 
   const IntT PV = patt->num_nodes;
   const IntT PE = patt->num_edges;
@@ -326,8 +351,6 @@ void Init_VR_VF(Graph * patt, IntT DV, FloatT * MU, FloatT * VR, FloatT * VF) {
   );
 }
 
-
-// edge-edge distance table
 __global__ void __EdgePairwiseNorm(
   IntT DE,
   IntT PE,
@@ -345,9 +368,9 @@ __global__ void __EdgePairwiseNorm(
     IntT i = k / PE;
     IntT j = k % PE;
     FloatT dist = d_norm_2(
-      edge_feat_dim,
       patt_edge_feats + j * edge_feat_dim,
-      data_edge_feats + i * edge_feat_dim
+      data_edge_feats + i * edge_feat_dim,
+      edge_feat_dim
     );
 
     CE[k] = dist;
@@ -357,6 +380,7 @@ __global__ void __EdgePairwiseNorm(
 }
 
 void Init_CE_RE_FE(Graph * data, Graph * patt, FloatT * d_CE, FloatT * d_RE, FloatT * d_FE) {
+  // Pairwise distance between edge features
 
   IntT DE = data->num_edges;
   IntT PE = patt->num_edges;
@@ -442,47 +466,9 @@ void VF_VR(Graph * patt, IntT DV, FloatT * d_MU, FloatT * d_FMax, FloatT * d_RMa
   );
 }
 
-__global__ void __copyChangeSign(FloatT * d_out, FloatT * d_in, IntT num_out) {
-  IntT i = threadIdx.x + blockDim.x * blockIdx.x;
-  if(i < num_out)
-    d_out[i] = -d_in[i];
-}
-
-__global__ void __tileVector(IntT * d_out, IntT * d_in, IntT num_in, IntT num_out) {
-  IntT i = threadIdx.x + blockDim.x * blockIdx.x;
-  if(i < num_out)
-    d_out[i] = d_in[i % num_in];
-}
-
-__global__ void __tileVectorWithOffset(IntT * d_out, IntT * d_in, IntT num_in, IntT num_uin, IntT num_out) {
-  IntT i = threadIdx.x + blockDim.x * blockIdx.x;
-  if(i < num_out)
-    d_out[i] = num_uin * (i / num_in) + d_in[i % num_in];
-}
-
-// __global__ void __vectorAdd(FloatT * d_out, FloatT * d_in, IntT num_out) {
-//   IntT i = threadIdx.x + blockDim.x * blockIdx.x;
-//   if(i < num_out)
-//     d_out[i] += d_in[i];
-// }
-
-__global__ void __vectorScatterAdd(FloatT * d_out, IntT * d_key_in, FloatT * d_value_in, IntT * n) {
-  IntT i = threadIdx.x + blockDim.x * blockIdx.x;
-  if(i < n[0])
-    d_out[d_key_in[i]] += d_value_in[i];
-}
-
-__global__ void __reorderEdges(FloatT* d_out, FloatT* d_in, IntT* d_map_r, IntT num_in, IntT num_out) {
-  IntT i = threadIdx.x + blockDim.x * blockIdx.x;
-  if(i < num_out) {
-    IntT col = i % num_in;
-    IntT row = i / num_in;
-    d_out[i] = d_in[row * num_in + d_map_r[col]];
-  }
-}
-
-
 void UpdateMU(Graph * patt, IntT DV, FloatT * d_CV, FloatT * d_FMax, FloatT * d_RMax, FloatT * d_MU) {
+  // Replace columns of MU w/ sum over FMax/RMax of adjacent edges + subtract CV
+
   void     *d_temp_storage = NULL;
   size_t   temp_storage_bytes = 0;
 
@@ -494,7 +480,7 @@ void UpdateMU(Graph * patt, IntT DV, FloatT * d_CV, FloatT * d_FMax, FloatT * d_
 
   IntT block_dv_pv = 1 + (DV * PV) / THREAD;
   assert(THREAD * block_dv_pv > DV * PV);
-  __copyChangeSign<<<block_dv_pv, THREAD>>>(d_MU, d_CV, DV * PV);
+  __scalarMultiply<<<block_dv_pv, THREAD>>>(d_MU, d_CV, (FloatT)-1.0, DV * PV);
 
   // --------------------------------------------
   // Tile srcs
@@ -657,7 +643,7 @@ void RMax(Graph * data, IntT PE, FloatT * d_Cnull, FloatT * d_VFmax, FloatT * d_
   // Elementwise max w/ V*max
   //   !! CNull hardcoded to 0, so ignore
 
-  __tileMax<<<block_dv_pe, THREAD>>>(d_RMax, d_VFmax, PE, DV * PE);
+  __maxMatrixRowVector<<<block_dv_pe, THREAD>>>(d_RMax, d_VFmax, PE, DV * PE);
 
   // --------------------------------------
   // Free memory
@@ -731,7 +717,7 @@ void FMax(Graph* data, IntT PE, FloatT* d_Cnull, FloatT* d_VRmax, FloatT* d_FE, 
   // Elementwise max w/ V*max
   //   !! CNull hardcoded to 0, so ignore
 
-  __tileMax<<<block_dv_pe, THREAD>>>(d_FMax, d_VRmax, PE, DV * PE);
+  __maxMatrixRowVector<<<block_dv_pe, THREAD>>>(d_FMax, d_VRmax, PE, DV * PE);
 
   // -------------------------------------
   // Free memory
