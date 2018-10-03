@@ -7,6 +7,7 @@ void host2device(WorkArrays&, WorkArrays&, uint64_t, uint64_t, uint64_t, uint64_
 void d_rowmax(double*, double*, uint64_t, uint64_t);
 void d_rowsum(double*, double*, uint64_t, uint64_t);
 
+void d_Init_CV_MU(Graph*, Graph*, double*, double*);
 void d_VFmax_VRmax(Graph*, Graph*,double*, double*, double*, double*);
 void d_NormProb(uint64_t, uint64_t, double*);
 void d_Init_VR_VF(Graph*, Graph*, double*, double*, double*);

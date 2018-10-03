@@ -53,12 +53,12 @@ void host2device(WorkArrays &h_WA, WorkArrays &d_WA, uint64_t DV, uint64_t DE, u
 //   return sqrt(sum);
 // }
 
-__device__ void d_norm_2(int num_attr, double * vec1, double * vec2, double *out, int k) {
+__device__ double d_norm_2(int num_attr, double * vec1, double * vec2) {
   double sum = 0.0;
   for (int i = 0; i < num_attr; i ++) {
     sum += (vec1[i] - vec2[i]) * (vec1[i] - vec2[i]);
   }
-  out[k] = sqrt(sum);
+  return sqrt(sum);
 }
 
 __global__ void __transpose(double *d_xt, double *d_x, uint64_t num_rows, uint64_t num_cols) {
@@ -164,6 +164,37 @@ void d_rowsum(double * d_out, double * d_in, uint64_t num_rows, uint64_t num_col
 }
 
 // ================ Specific ===============
+
+__global__ void __pairwiseNorm(
+  int num_DV,
+  int num_PV,
+  int num_AT,
+  double* CV,
+  double* MU,
+  double* PAttr,
+  double* DAttr
+) {
+  uint64_t k = threadIdx.x + blockIdx.x * blockDim.x;
+  if(k < num_DV * num_PV) {
+      uint64_t i = k / num_PV;
+      uint64_t j = k % num_PV;
+      double tmp = d_norm_2(num_AT - 1, PAttr + j * num_AT + 1, DAttr + i * num_AT + 1);
+      CV[k] = tmp;
+      MU[k] = -tmp;
+  }
+}
+
+void d_Init_CV_MU(Graph* d_Data_Graph, Graph* d_Pattern_Graph, double* d_CV, double* d_MU) {
+  uint64_t num_DV = d_Data_Graph->num_vertices;
+  uint64_t num_PV = d_Pattern_Graph->num_vertices;
+  uint64_t num_AT = d_Data_Graph->Vtable.num_cols;
+  double * d_DAttr  = (double *) d_Data_Graph->Vtable.table;
+  double * d_PAttr  = (double *) d_Pattern_Graph->Vtable.table;
+
+  int block = 1 + (num_DV * num_PV) / THREAD;
+  __pairwiseNorm<<<block, THREAD>>>(num_DV, num_PV, num_AT, d_CV, d_MU, d_PAttr, d_DAttr);
+
+}
 
 void d_VFmax_VRmax(Graph * d_Data_Graph, Graph * d_Pattern_Graph,
                  double * d_VF, double * d_VR, double * d_VFmax, double * d_VRmax) {
@@ -306,7 +337,8 @@ __global__ void __d_Init_CE_RE_FE(
 
   uint64_t i = k / num_PE;
   uint64_t j = k % num_PE;
-  d_norm_2(num_AT - 2, PAttr + j * num_AT + 2, DAttr + i * num_AT + 2, CE, k);
+  double tmp = d_norm_2(num_AT - 2, PAttr + j * num_AT + 2, DAttr + i * num_AT + 2);
+  CE[k] = tmp;
   RE[k] = - CE[k];
   FE[k] = - CE[k];
 }
