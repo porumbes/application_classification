@@ -1,3 +1,6 @@
+#ifndef __MAIN_H
+#define __MAIN_H
+
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -6,49 +9,42 @@
 #include <algorithm>
 #include <math.h>
 #include <cfloat>
-#include <omp.h>
 
-typedef struct Table {
-  uint64_t num_rows;
-  uint64_t num_cols;
-  uint64_t * table;
-} Table;
+typedef uint64_t IntT;
+typedef double FloatT;
 
 typedef struct Graph {
-  uint64_t num_edges;
-  uint64_t num_vertices;
-  uint64_t * starts;
-  Table Vtable;
-  Table Etable;
+  IntT    num_nodes;
+  IntT    node_feat_dim;
+  FloatT* node_feats;
+
+  IntT    num_edges;
+  IntT    edge_feat_dim;
+  FloatT* edge_feats;
+
+  IntT* srcs;
+  IntT* dsts;
+
+  IntT* srcs_r;
+  IntT* dsts_r;
+  IntT* map_r;
 } Graph;
 
-typedef struct WorkArrays {
-  double * CV;
-  double * CE;
-  double * Cnull;
-  double * MU;
-  double * RE;
-  double * FE;
-  double * VR;
-  double * VF;
-  double * VRmax;
-  double * VFmax;
-  double * RMax;
-  double * FMax;
-} WorkArrays;
 
-double my_timer();
-double atomic_fmax(double *, double);
-void NormProb(uint64_t, uint64_t, double *);
+namespace ac {
+  void sort_edges(IntT*, IntT*, IntT*, IntT*, IntT*, IntT);
+  void ColumnSoftmax(IntT, IntT, FloatT*);
 
-Table readEdgeTable(char *);
-Table readVertexTable(char *);
-Graph constructGraph(Table *, Table *);
-WorkArrays initializeWorkArrays(Graph *, Graph *);
+  void Init_CV_MU(Graph*, Graph*, FloatT*, FloatT*);
+  void Init_CE_RE_FE(Graph*, Graph*, FloatT*, FloatT*, FloatT*);
 
-void VF_VR(Graph *, Graph *, double *, double *, double *, double *, double *);
-void VFmax_VRmax(Graph *, Graph *, double *, double *, double *, double *);
-void FE_RE(Graph *, Graph *, double *, double *, double *, double *, double *);
-void FMax(Graph *, Graph *, double *, double *, double *, double *);
-void RMax(Graph *, Graph *, double *, double *, double *, double *);
-void MU(Graph *, Graph *, double *, double *, double *, double *);
+  void Init_VR_VF(Graph*, IntT, FloatT*, FloatT*, FloatT*);
+  void VFmax_VRmax(IntT, IntT, FloatT*, FloatT*, FloatT*, FloatT*);
+  void VF_VR(Graph*, IntT, FloatT*, FloatT*, FloatT*, FloatT*, FloatT*);
+  void UpdateMU(Graph*, IntT, FloatT*, FloatT*, FloatT*, FloatT*);
+  void FE_RE(Graph *, IntT, FloatT*, FloatT*, FloatT*, FloatT*, FloatT*);
+  void FMax(Graph *, IntT, FloatT*, FloatT*, FloatT*, FloatT*);
+  void RMax(Graph *, IntT, FloatT*, FloatT*, FloatT*, FloatT*);
+}
+
+#endif
