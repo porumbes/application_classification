@@ -4,6 +4,46 @@
 #include <iostream>
 #include "main.h"
 
+// void loadGraph(char * edge_filename, char * node_filename, Graph* graph) {
+
+//   // -------------------------
+//   // Read nodes
+
+//   uint64_t num_nodes, node_feat_dim;
+//   FILE * nodeFile = fopen(node_filename, "r");
+//   if (! nodeFile) {printf("Cannot open node file %s\n", node_filename); exit(1);}
+
+//   fscanf(nodeFile, "%lu %lu", & num_nodes, & node_feat_dim);
+//   uint64_t * node_table = (uint64_t *) malloc(num_nodes * node_feat_dim * sizeof(uint64_t));
+//   for (uint64_t i = 0; i < num_nodes * node_feat_dim; i += node_feat_dim) {
+//     fscanf(nodeFile, "%lu", node_table + i); // read node id
+//     for (uint64_t j = 1; j < node_feat_dim; j ++) {
+//         fscanf(nodeFile, "%lf", (double *) (node_table + i + j)); // read attribute
+//     }
+//   }
+
+//   // -------------------------
+//   // Read edges
+
+//   uint64_t num_edges, edge_feat_dim;
+//   FILE * edgeFile = fopen(edge_filename, "r");
+//   if (! edgeFile) {printf("Cannot open file %s\n", edge_filename); exit(1);}
+
+//   fscanf(edgeFile, "%lu %lu", & num_edges, & edge_feat_dim);
+//   uint64_t * edge_table = (uint64_t *) malloc(num_edges * edge_feat_dim * sizeof(uint64_t));
+
+//   uint64_t * srcs = (uint64_t *) malloc(num_edges * sizeof(uint64_t));
+//   uint64_t * dsts = (uint64_t *) malloc(num_edges * sizeof(uint64_t));
+
+//   for (uint64_t i = 0; i < num_edges * edge_feat_dim; i += edge_feat_dim) {
+//     fscanf(edgeFile, "%lu", srcs + i); // read src
+//     fscanf(edgeFile, "%lu", dsts + i); // read dst
+//     for (uint64_t j = 0; j < edge_feat_dim - 2; j ++) {
+//         fscanf(edgeFile, "%lf", (double *) (edge_table + i + j));
+//     }
+//   }
+// }
+
 Graph constructGraph(Table * Vtable, Table * Etable) {
   Graph graph;
   graph.Vtable       = * Vtable;
@@ -13,47 +53,47 @@ Graph constructGraph(Table * Vtable, Table * Etable) {
   return graph;
 }
 
-Table readEdgeTable(char * filename) {
-  uint64_t num_rows, num_cols;
-  FILE * tableFile = fopen(filename, "r");
-  if (! tableFile) {printf("Cannot open file %s\n", filename); exit(1);}
+Table readEdgeTable(char * edge_filename) {
+  uint64_t num_edges, edge_feat_dim;
+  FILE * tableFile = fopen(edge_filename, "r");
+  if (! tableFile) {printf("Cannot open file %s\n", edge_filename); exit(1);}
 
-  fscanf(tableFile, "%lu %lu", & num_rows, & num_cols);
-  uint64_t * table = (uint64_t *) malloc(num_rows * num_cols * sizeof(uint64_t));
+  fscanf(tableFile, "%lu %lu", & num_edges, & edge_feat_dim);
+  uint64_t * table = (uint64_t *) malloc(num_edges * edge_feat_dim * sizeof(uint64_t));
 
-  for (uint64_t i = 0; i < num_rows * num_cols; i += num_cols) {
+  for (uint64_t i = 0; i < num_edges * edge_feat_dim; i += edge_feat_dim) {
       fscanf(tableFile, "%lu", table + i);                          // read src id
       fscanf(tableFile, "%lu", table + i + 1);                      // read dst id
 
-      for (uint64_t j = 2; j < num_cols; j ++) {
+      for (uint64_t j = 2; j < edge_feat_dim; j ++) {
           fscanf(tableFile, "%lf", (double *) (table + i + j));     // read attribute
   }   }
 
   Table edgeTable;
-  edgeTable.num_rows = num_rows;
-  edgeTable.num_cols = num_cols;
+  edgeTable.num_rows = num_edges;
+  edgeTable.num_cols = edge_feat_dim;
   edgeTable.table    = table;
   return edgeTable;
 }
 
-Table readVertexTable(char * filename) {
-  uint64_t num_rows, num_cols;
-  FILE * tableFile = fopen(filename, "r");
-  if (! tableFile) {printf("Cannot open file %s\n", filename); exit(1);}
+Table readVertexTable(char * node_filename) {
+  uint64_t num_nodes, node_feat_dim;
+  FILE * tableFile = fopen(node_filename, "r");
+  if (! tableFile) {printf("Cannot open file %s\n", node_filename); exit(1);}
 
-  fscanf(tableFile, "%lu %lu", & num_rows, & num_cols);
-  uint64_t * table = (uint64_t *) malloc(num_rows * num_cols * sizeof(uint64_t));
+  fscanf(tableFile, "%lu %lu", & num_nodes, & node_feat_dim);
+  uint64_t * table = (uint64_t *) malloc(num_nodes * node_feat_dim * sizeof(uint64_t));
 
-  for (uint64_t i = 0; i < num_rows * num_cols; i += num_cols) {
+  for (uint64_t i = 0; i < num_nodes * node_feat_dim; i += node_feat_dim) {
       fscanf(tableFile, "%lu", table + i);                          // read id
 
-      for (uint64_t j = 1; j < num_cols; j ++) {
+      for (uint64_t j = 1; j < node_feat_dim; j ++) {
           fscanf(tableFile, "%lf", (double *) (table + i + j));     // read attribute
   }   }
 
   Table vertexTable;
-  vertexTable.num_rows = num_rows;
-  vertexTable.num_cols = num_cols;
+  vertexTable.num_rows = num_nodes;
+  vertexTable.num_cols = node_feat_dim;
   vertexTable.table    = table;
   return vertexTable;
 }
@@ -81,7 +121,6 @@ void table2device(Table* d_table, Table* h_table) {
 
   cudaMalloc((void**)&d_table->srcs_r, h_table->num_rows * sizeof(uint64_t));
   cudaMalloc((void**)&d_table->dsts_r, h_table->num_rows * sizeof(uint64_t));
-
 }
 
 

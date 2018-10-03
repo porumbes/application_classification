@@ -5,10 +5,10 @@ ARCH=\
 
 all : main
 
-main: main.cu readTable.cc initialize.cu iterate.cc kernels.cu kernels.cuh
+main: main.cu initialize.cu iterate.cc kernels.cu kernels.cuh
 	nvcc $(ARCH) -o main \
 		--compiler-options -Wall \
-		main.cu readTable.cc initialize.cu iterate.cc kernels.cu \
+		main.cu initialize.cu iterate.cc kernels.cu \
 		-I cub/cub
 
 clean:
