@@ -2,29 +2,12 @@
 #include "main.h"
 #include "kernels.cuh"
 
-void initializeWorkArrays(
-  Graph * h_Data_Graph, Graph * h_Pattern_Graph,
-  Graph * d_Data_Graph, Graph * d_Pattern_Graph,
-  WorkArrays &h_WA, WorkArrays &d_WA) {
+void initializeWorkArrays(Graph * d_Data_Graph, Graph * d_Pattern_Graph, WorkArrays &d_WA) {
 
-  const uint64_t DV = h_Data_Graph->num_vertices;
-  const uint64_t DE = h_Data_Graph->num_edges;
-  const uint64_t PV = h_Pattern_Graph->num_vertices;
-  const uint64_t PE = h_Pattern_Graph->num_edges;
-
-  // CPU allocation
-  h_WA.CV       = (double *) malloc(DV * PV * sizeof(double));
-  h_WA.CE       = (double *) malloc(DE * PE * sizeof(double));
-  h_WA.Cnull    = (double *) malloc(PE *      sizeof(double));
-  h_WA.MU       = (double *) malloc(DV * PV * sizeof(double));
-  h_WA.RE       = (double *) malloc(DE * PE * sizeof(double));
-  h_WA.FE       = (double *) malloc(DE * PE * sizeof(double));
-  h_WA.VR       = (double *) malloc(DV * PE * sizeof(double));
-  h_WA.VF       = (double *) malloc(DV * PE * sizeof(double));
-  h_WA.VRmax    = (double *) malloc(PE *      sizeof(double));
-  h_WA.VFmax    = (double *) malloc(PE *      sizeof(double));
-  h_WA.RMax     = (double *) malloc(DV * PE * sizeof(double));
-  h_WA.FMax     = (double *) malloc(DV * PE * sizeof(double));
+  const uint64_t DV = d_Data_Graph->num_vertices;
+  const uint64_t DE = d_Data_Graph->num_edges;
+  const uint64_t PV = d_Pattern_Graph->num_vertices;
+  const uint64_t PE = d_Pattern_Graph->num_edges;
 
   // GPU allocation
   cudaMalloc((void **)&d_WA.CV,    DV * PV * sizeof(double));
@@ -40,12 +23,6 @@ void initializeWorkArrays(
   cudaMalloc((void **)&d_WA.RMax,  DV * PE * sizeof(double));
   cudaMalloc((void **)&d_WA.FMax,  DV * PE * sizeof(double));
 
-  // Pairwise distances
-  device2host(h_WA, d_WA, DV, DE, PV, PE);
-    // Pairwise distance computation
-    // Init_CV_MU(h_Data_Graph, h_Pattern_Graph, h_WA.CV, h_WA.MU);
-  host2device(h_WA, d_WA, DV, DE, PV, PE);
-
   d_Init_CV_MU(d_Data_Graph, d_Pattern_Graph, d_WA.CV, d_WA.MU);
 
   d_NormProb(DV, PV, d_WA.CV);
@@ -60,7 +37,4 @@ void initializeWorkArrays(
 
   d_FMax(d_Data_Graph, d_Pattern_Graph, d_WA.Cnull, d_WA.VRmax, d_WA.FE, d_WA.FMax);
   d_RMax(d_Data_Graph, d_Pattern_Graph, d_WA.Cnull, d_WA.VFmax, d_WA.RE, d_WA.RMax);
-
-  device2host(h_WA, d_WA, DV, DE, PV, PE);
-  host2device(h_WA, d_WA, DV, DE, PV, PE);
 }

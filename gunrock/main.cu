@@ -60,43 +60,33 @@ int main ( int argc, char * argv[] ) {
   Table d_Pattern_Etable;
   table2device(&d_Pattern_Etable, &h_Pattern_Etable);
 
-
-  Graph h_Data_Graph    = constructGraph(&h_Data_Vtable, &h_Data_Etable);
-  Graph h_Pattern_Graph = constructGraph(&h_Pattern_Vtable, &h_Pattern_Etable);
-
   Graph d_Data_Graph    = constructGraph(&d_Data_Vtable, &d_Data_Etable);
   Graph d_Pattern_Graph = constructGraph(&d_Pattern_Vtable, &d_Pattern_Etable);
 
   // --
   // Init
-  WorkArrays h_WA;
+
   WorkArrays d_WA;
-  initializeWorkArrays(
-    &h_Data_Graph, &h_Pattern_Graph,
-    &d_Data_Graph, &d_Pattern_Graph,
-    h_WA, d_WA
-  );
+  initializeWorkArrays(&d_Data_Graph, &d_Pattern_Graph, d_WA);
 
   // --
   // Run
 
-  uint64_t DV = h_Data_Graph.num_vertices;
-  uint64_t PV = h_Pattern_Graph.num_vertices;
+  const uint64_t DV = d_Data_Graph.num_vertices;
+  const uint64_t PV = d_Pattern_Graph.num_vertices;
 
-
-  // for (uint64_t i = 0; i < PV; i++) {
-      run_iteration(
-        &h_Data_Graph, &h_Pattern_Graph,
-        &d_Data_Graph, &d_Pattern_Graph,
-        h_WA, d_WA
-      );
-  // }
+  for (uint64_t i = 0; i < PV; i++) {
+      run_iteration(&d_Data_Graph, &d_Pattern_Graph, d_WA);
+  }
 
   // --
   // Print results
 
+  double *h_MU = (double *) malloc(DV * PV * sizeof(double));
+  cudaMemcpy(h_MU, d_WA.MU, DV * PV * sizeof(double), cudaMemcpyDeviceToHost);
+
   for (uint64_t i = 0; i < DV * PV; i ++) {
-    printf("%e\n", h_WA.MU[i]);
+    printf("%e\n", h_MU[i]);
   }
   return 0;
 }
