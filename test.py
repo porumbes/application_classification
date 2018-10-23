@@ -83,5 +83,5 @@ for _ in range(num_pv):
     mu = normprob(mu)
     # passed 1 iter
 
-np.savetxt('python_result_test', np.hstack(mu))
+# np.savetxt('python_result_test', np.hstack(mu))
 np.savetxt('python_result', np.hstack(mu.T))

@@ -274,7 +274,11 @@ int main ( int argc, char * argv[] ) {
 
   FloatT *h_MU = (FloatT *) malloc(data.num_nodes * patt.num_nodes * sizeof(FloatT));
   cudaMemcpy(h_MU, MU, data.num_nodes * patt.num_nodes * sizeof(FloatT), cudaMemcpyDeviceToHost);
-  for (IntT i = 0; i < data.num_nodes * patt.num_nodes; i ++) printf("%f\n", h_MU[i]);
+  for (IntT i = 0; i < data.num_nodes; i ++) {
+    for (IntT j = 0; j < patt.num_nodes; j ++) {
+      printf("%e\n", h_MU[j * data.num_nodes + i]);
+    }
+  }
 
   // --
   // Free memory
