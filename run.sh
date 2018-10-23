@@ -10,24 +10,25 @@ rm -f orig_result
     ./data/georgiyPattern.Vertex.csv \
     ./data/georgiyPattern.Edges.csv > orig_result
 
-cat orig_result | openssl md5
-echo "(stdin)= bd57a5126d5f943ad5c15408d410790d"
+head orig_result
+# cat orig_result | openssl md5
+# echo "(stdin)= bd57a5126d5f943ad5c15408d410790d"
 
 rm -f python_result
 python test.py
-python validate.py
+# python validate.py
 
 
 # --
 # Test rmat
 
-make clean
-make
-rm -f orig_result
-time ./main \
-    data/rmat18.Vertex.csv \
-    data/rmat18.Edges.csv \
-    data/georgiyPattern.Vertex.csv \
-    data/georgiyPattern.Edges.csv > orig_result
+# make clean
+# make
+# rm -f orig_result
+# time ./main \
+#     data/rmat18.Vertex.csv \
+#     data/rmat18.Edges.csv \
+#     data/georgiyPattern.Vertex.csv \
+#     data/georgiyPattern.Edges.csv > orig_result
 
-cat orig_result | openssl md5
+# cat orig_result | openssl md5

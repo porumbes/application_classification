@@ -145,11 +145,11 @@ namespace device {
   ) {
     IntT k = threadIdx.x + blockIdx.x * blockDim.x;
     if(k < DV * PV) {
-        IntT i = k / PV;
-        IntT j = k % PV;
+        IntT i = k / DV;
+        IntT j = k % DV;
         FloatT dist = d_norm_2(
-          patt_node_feats + j * node_feat_dim,
-          data_node_feats + i * node_feat_dim,
+          patt_node_feats + i * node_feat_dim,
+          data_node_feats + j * node_feat_dim,
           node_feat_dim
         );
 
@@ -175,8 +175,8 @@ namespace device {
       IntT i = k / PE;
       IntT j = k % PE;
       FloatT dist = d_norm_2(
-        patt_edge_feats + j * edge_feat_dim,
-        data_edge_feats + i * edge_feat_dim,
+        patt_edge_feats + i * edge_feat_dim,
+        data_edge_feats + j * edge_feat_dim,
         edge_feat_dim
       );
 
@@ -315,36 +315,36 @@ namespace host {
     // ----------------------------
     // Compute column max
 
-    FloatT *d_xt;
-    cudaMalloc((void**)&d_xt, num_rows * num_cols * sizeof(FloatT));
-    __transpose<<<block, THREAD>>>(d_xt, d_x, num_rows, num_cols);
-    __row_reduce(d_storage, d_xt, num_cols, num_rows, cub::Max(), -DBL_MAX);
+    // FloatT *d_xt;
+    // cudaMalloc((void**)&d_xt, num_rows * num_cols * sizeof(FloatT));
+    // __transpose<<<block, THREAD>>>(d_xt, d_x, num_rows, num_cols);
+    __row_reduce(d_storage, d_x, num_rows, num_cols, cub::Max(), -DBL_MAX);
 
     // --------------------------------
     // Subtract max from columns
 
-    __rowSubExp<<<block, THREAD>>>(d_xt, num_cols, num_rows, d_storage);
+    __rowSubExp<<<block, THREAD>>>(d_x, num_rows, num_cols, d_storage);
 
     // --------------------------------
     // Sum columns
 
     cudaMemset(d_storage, 0, num_cols * sizeof(FloatT));
-    __row_reduce(d_storage, d_xt, num_cols, num_rows, cub::Sum(), 0);
+    __row_reduce(d_storage, d_x, num_rows, num_cols, cub::Sum(), 0);
 
     // ---------------------------------
     // Subtract log-sum from columns
 
-    __rowSubLog<<<block, THREAD>>>(d_xt, num_cols, num_rows, d_storage);
+    __rowSubLog<<<block, THREAD>>>(d_x, num_rows, num_cols, d_storage);
 
     // ---------------------------------
     // Transpose back to original shape
 
-    __transpose<<<block, THREAD>>>(d_x, d_xt, num_cols, num_rows);
+    // __transpose<<<block, THREAD>>>(d_x, d_xt, num_cols, num_rows);
 
     // ---------------------------------
     // Free memory
 
-    cudaFree(d_xt);
+    // cudaFree(d_xt);
     cudaFree(d_storage);
   }
 
