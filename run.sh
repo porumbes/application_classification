@@ -8,9 +8,10 @@ rm -f orig_result
     ./data/georgiyData.Vertex.csv \
     ./data/georgiyData.Edges.csv \
     ./data/georgiyPattern.Vertex.csv \
-    ./data/georgiyPattern.Edges.csv > orig_result
+    ./data/georgiyPattern.Edges.csv > tmp
 
-head orig_result
+head tmp
+tail tmp
 # cat orig_result | openssl md5
 # echo "(stdin)= bd57a5126d5f943ad5c15408d410790d"
 

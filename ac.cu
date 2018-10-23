@@ -45,11 +45,11 @@ __global__ void __transposeWithKey(FloatT *d_xt, FloatT *d_x, IntT *d_idx, IntT*
   }
 }
 
-__global__ void __maxMatrixRowVector(FloatT * d_matrix, FloatT * d_vec, IntT num_cols, IntT n) {
+__global__ void __maxMatrixColumnVector(FloatT * d_matrix, FloatT * d_vec, IntT num_rows, IntT n) {
   // Broadast row vector over matrix and take max
   IntT i = threadIdx.x + blockDim.x * blockIdx.x;
   if(i < n) {
-    d_matrix[i] = max(d_matrix[i], d_vec[i % num_cols]);
+    d_matrix[i] = max(d_matrix[i], d_vec[i / num_rows]);
   }
 }
 
@@ -90,6 +90,13 @@ __global__ void __vectorScatterAdd(FloatT * d_out, IntT * d_key_in, FloatT * d_v
   IntT i = threadIdx.x + blockDim.x * blockIdx.x;
   if(i < n[0])
     d_out[d_key_in[i]] += d_value_in[i];
+}
+
+__global__ void __vectorScatterMax(FloatT * d_out, IntT * d_key_in, FloatT * d_value_in, IntT * n) {
+  // Add vector `in` to vector `out` at specific offsets
+  IntT i = threadIdx.x + blockDim.x * blockIdx.x;
+  if(i < n[0])
+    d_out[d_key_in[i]] = max(d_value_in[i], d_out[d_key_in[i]]);
 }
 
 __global__ void __reorderColumns(FloatT* d_out, FloatT* d_in, IntT* d_map_r, IntT num_in, IntT num_out) {
@@ -172,8 +179,8 @@ namespace device {
     IntT k = threadIdx.x + blockDim.x * blockIdx.x;
 
     if(k < DE * PE) {
-      IntT i = k / PE;
-      IntT j = k % PE;
+      IntT i = k / DE;
+      IntT j = k % DE;
       FloatT dist = d_norm_2(
         patt_edge_feats + i * edge_feat_dim,
         data_edge_feats + j * edge_feat_dim,
@@ -186,7 +193,7 @@ namespace device {
     }
   }
 
-  __global__ void RepeatColumnsByPatternEdges(
+  __global__ void RepeatRowsByPatternEdges(
     IntT DV,
     IntT PE,
     IntT PV,
@@ -200,14 +207,14 @@ namespace device {
     IntT k = threadIdx.x + blockDim.x * blockIdx.x;
 
     if(k < DV * PE) {
-      IntT i = k / PE;
-      IntT j = k % PE;
-      VR[k] = MU[i * PV + patt_srcs[j]];
-      VF[k] = MU[i * PV + patt_dsts[j]];
+      IntT i = k / DV;
+      IntT j = k % DV;
+      VR[k] = MU[patt_srcs[i] * DV + j];
+      VF[k] = MU[patt_dsts[i] * DV + j];
     }
   }
 
-  __global__ void RepeatColumnsByPatternEdgesSubtract(
+  __global__ void RepeatRowsByPatternEdgesSubtract(
     IntT DV,
     IntT PE,
     IntT PV,
@@ -223,16 +230,17 @@ namespace device {
 
     IntT k = threadIdx.x + blockDim.x * blockIdx.x;
     if(k < DV * PE) {
-      IntT i = k / PE;
-      IntT j = k % PE;
-      VF[k] = MU[i * PV + patt_dsts[j]] - FMax[k];
-      VR[k] = MU[i * PV + patt_srcs[j]] - RMax[k];
+      IntT i = k / DV;
+      IntT j = k % DV;
+      VR[k] = MU[patt_srcs[i] * DV + j] - RMax[k];
+      VF[k] = MU[patt_dsts[i] * DV + j] - FMax[k];
     }
   }
 
-  __global__ void RepeatColumnsByDataEdges(
+  __global__ void RepeatRowsByDataEdges(
     IntT DE,
     IntT PE,
+    IntT DV,
     FloatT * CE,
     FloatT * VR,
     FloatT * VF,
@@ -243,13 +251,13 @@ namespace device {
   {
     IntT k = threadIdx.x + blockDim.x * blockIdx.x;
     if(k < DE * PE) {
-      IntT ij  = k / PE;
-      IntT km  = k % PE;
-      IntT src = srcs[ij];
+      IntT ij  = k / DE;
+      IntT km  = k % DE;
+      IntT src = srcs[km];
 
       FloatT CE_k = CE[k];
-      FE[k] = - CE_k + VR[src * PE + km];
-      RE[k] = - CE_k + VF[src * PE + km];
+      FE[k] = - CE_k + VR[src + DV * ij];
+      RE[k] = - CE_k + VF[src + DV * ij];
     }
   }
 }
@@ -289,18 +297,18 @@ namespace host {
     cudaFree(map);
   }
 
-  void ColumnMax(IntT num_rows, IntT num_cols, FloatT* d_in, FloatT* d_out) {
+  void RowMax(IntT num_rows, IntT num_cols, FloatT* d_in, FloatT* d_out) {
     IntT block = 1 + (num_rows * num_cols) / THREAD;
     assert(THREAD * block > num_rows * num_cols);
 
-    FloatT *d_in_t;
-    cudaMalloc((void**)&d_in_t, num_rows * num_cols * sizeof(FloatT));
-    __transpose<<<block, THREAD>>>(d_in_t, d_in, num_rows, num_cols);
-    __row_reduce(d_out, d_in_t, num_cols, num_rows, cub::Max(), -DBL_MAX);
-    cudaFree(d_in_t);
+    // FloatT *d_in_t;
+    // cudaMalloc((void**)&d_in_t, num_rows * num_cols * sizeof(FloatT));
+    // __transpose<<<block, THREAD>>>(d_in_t, d_in, num_rows, num_cols);
+    __row_reduce(d_out, d_in, num_rows, num_cols, cub::Max(), -DBL_MAX);
+    // cudaFree(d_in_t);
   }
 
-  void ColumnSoftmax(const IntT num_rows, const IntT num_cols, FloatT *d_x) {
+  void RowSoftmax(const IntT num_rows, const IntT num_cols, FloatT *d_x) {
     // Compute softmax over columns
 
     // --------------------------
@@ -364,7 +372,8 @@ namespace host {
 
     FloatT *d_XEt;
     cudaMalloc((void**)&d_XEt, num_rows_in * num_cols * sizeof(FloatT));
-    __transpose<<<block_rowin_col, THREAD>>>(d_XEt, d_XE, num_rows_in, num_cols);
+    cudaMemcpy(d_XEt, d_XE, num_rows_in * num_cols * sizeof(FloatT), cudaMemcpyDeviceToDevice);
+    // __transpose<<<block_rowin_col, THREAD>>>(d_XEt, d_XE, num_rows_in, num_cols);
 
     // --------------------------------------
     // Tile dsts (w/ offset)
@@ -378,11 +387,11 @@ namespace host {
     // Reorder data (optional)
 
     if(map != NULL) {
-      FloatT *d_XEt_r;
-      cudaMalloc((void**)&d_XEt_r, num_rows_in * num_cols * sizeof(FloatT));
-      __reorderColumns<<<block_rowin_col, THREAD>>>(d_XEt_r, d_XEt, map, num_rows_in, num_rows_in * num_cols);
-      cudaMemcpy(d_XEt, d_XEt_r, num_rows_in * num_cols * sizeof(FloatT), cudaMemcpyDeviceToDevice);
-      cudaFree(d_XEt_r);
+      FloatT *d_XEr;
+      cudaMalloc((void**)&d_XEr, num_rows_in * num_cols * sizeof(FloatT));
+      __reorderColumns<<<block_rowin_col, THREAD>>>(d_XEr, d_XEt, map, num_rows_in, num_rows_in * num_cols);
+      cudaMemcpy(d_XEt, d_XEr, num_rows_in * num_cols * sizeof(FloatT), cudaMemcpyDeviceToDevice);
+      cudaFree(d_XEr);
     }
 
     // --------------------------------------
@@ -407,13 +416,14 @@ namespace host {
     // Transpose result back to d_FMax
 
     __fillLow<<<block_rowout_col, THREAD>>>(d_XMax, num_cols * num_rows_out);
-    __transposeWithKey<<<block_rowout_col, THREAD>>>(d_XMax, d_values_out, d_keys_out, d_num_runs_out, num_cols, num_rows_out);
+    __vectorScatterMax<<<block_rowout_col, THREAD>>>(d_XMax, d_keys_out, d_values_out, d_num_runs_out);
+    // __transposeWithKey<<<block_rowout_col, THREAD>>>(d_XMax, d_values_out, d_keys_out, d_num_runs_out, num_cols, num_rows_out);
 
     // --------------------------------------
     // Elementwise max w/ V*max
     //   !! CNull hardcoded to 0, so ignore
 
-    __maxMatrixRowVector<<<block_rowout_col, THREAD>>>(d_XMax, d_VYmax, num_cols, num_rows_out * num_cols);
+    __maxMatrixColumnVector<<<block_rowout_col, THREAD>>>(d_XMax, d_VYmax, num_rows_out, num_rows_out * num_cols);
 
     // -------------------------------------
     // Free memory
@@ -436,25 +446,34 @@ namespace host {
     IntT PV = patt->num_nodes;
     IntT PE = patt->num_edges;
 
+    IntT block_dv_pv = 1 + (DV * PV) / THREAD;
+    IntT block_dv_pe = 1 + (DV * PE) / THREAD;
+
+    assert(THREAD * block_dv_pv > DV * PV);
+    assert(THREAD * block_dv_pe > DV * PE);
+
     // --------------------------------------------
     // MU = -CV
 
-    IntT block_dv_pv = 1 + (DV * PV) / THREAD;
-    assert(THREAD * block_dv_pv > DV * PV);
     __scalarMultiply<<<block_dv_pv, THREAD>>>(d_MU, d_CV, (FloatT)-1.0, DV * PV);
+
+    FloatT *d_MUt;
+    cudaMalloc((void**)&d_MUt, PV * DV * sizeof(FloatT));
+    __transpose<<<block_dv_pv, THREAD>>>(d_MUt, d_MU, PV, DV);
 
     // --------------------------------------------
     // Tile srcs
 
     IntT *d_tiled_nodes;
     cudaMalloc((void**)&d_tiled_nodes, DV * PE * sizeof(IntT));
-
-    IntT block_dv_pe = 1 + (DV * PE) / THREAD;
-    assert(THREAD * block_dv_pe > DV * PE);
     __tileVectorWithOffset<<<block_dv_pe, THREAD>>>(d_tiled_nodes, patt->srcs, PE, PV, DV * PE);
 
     // --------------------------------------------
     // Sum over rows of matrix
+
+    FloatT *d_RMax_t;
+    cudaMalloc((void**)&d_RMax_t, PE * DV * sizeof(FloatT));
+    __transpose<<<block_dv_pe, THREAD>>>(d_RMax_t, d_RMax, PE, DV);
 
     IntT   *d_keys_out;
     FloatT *d_values_out;
@@ -465,15 +484,16 @@ namespace host {
     cudaMalloc((void**)&d_num_runs_out,   1 * sizeof(IntT));
 
     cub::DeviceReduce::ReduceByKey(d_temp_storage, temp_storage_bytes,
-      d_tiled_nodes, d_keys_out, d_RMax, d_values_out, d_num_runs_out, cub::Sum(), DV * PE);
+      d_tiled_nodes, d_keys_out, d_RMax_t, d_values_out, d_num_runs_out, cub::Sum(), DV * PE);
     cudaMalloc(&d_temp_storage, temp_storage_bytes);
     cub::DeviceReduce::ReduceByKey(d_temp_storage, temp_storage_bytes,
-      d_tiled_nodes, d_keys_out, d_RMax, d_values_out, d_num_runs_out, cub::Sum(), DV * PE);
+      d_tiled_nodes, d_keys_out, d_RMax_t, d_values_out, d_num_runs_out, cub::Sum(), DV * PE);
+    cudaFree(d_RMax_t);
 
     // --------------------------------------------
     // (Scatter) Add to MU
 
-    __vectorScatterAdd<<<block_dv_pv, THREAD>>>(d_MU, d_keys_out, d_values_out, d_num_runs_out);
+    __vectorScatterAdd<<<block_dv_pv, THREAD>>>(d_MUt, d_keys_out, d_values_out, d_num_runs_out);
 
     // --------------------------------------------
     // Tile dsts
@@ -483,9 +503,14 @@ namespace host {
     // --------------------------------------
     // Reorder data
 
+    FloatT *d_FMax_t;
+    cudaMalloc((void**)&d_FMax_t, PE * DV * sizeof(FloatT));
+    __transpose<<<block_dv_pe, THREAD>>>(d_FMax_t, d_FMax, PE, DV);
+
     FloatT *d_FMax_r;
     cudaMalloc((void**)&d_FMax_r, DV * PE * sizeof(FloatT));
-    __reorderColumns<<<block_dv_pe, THREAD>>>(d_FMax_r, d_FMax, patt->map_r, PE, DV * PE);
+    __reorderColumns<<<block_dv_pe, THREAD>>>(d_FMax_r, d_FMax_t, patt->map_r, PE, DV * PE);
+    cudaFree(d_FMax_t);
 
     // --------------------------------------
     // Sum reduce
@@ -497,18 +522,21 @@ namespace host {
     cub::DeviceReduce::ReduceByKey(d_temp_storage, temp_storage_bytes,
       d_tiled_nodes, d_keys_out, d_FMax_r, d_values_out, d_num_runs_out, cub::Sum(), DV * PE);
 
-    // (Scatter) add to d_MU
-    __vectorScatterAdd<<<block_dv_pv, THREAD>>>(d_MU, d_keys_out, d_values_out, d_num_runs_out);
+    // (Scatter) add to d_MUt
+    __vectorScatterAdd<<<block_dv_pv, THREAD>>>(d_MUt, d_keys_out, d_values_out, d_num_runs_out);
+
+    __transpose<<<block_dv_pv, THREAD>>>(d_MU, d_MUt, DV, PV);
 
     // --------------------------------------
     // Free memory
 
-    cudaFree(d_temp_storage);
-    cudaFree(d_tiled_nodes);
-    cudaFree(d_keys_out);
-    cudaFree(d_values_out);
-    cudaFree(d_num_runs_out);
-    cudaFree(d_FMax_r);
+    // cudaFree(d_temp_storage);
+    // cudaFree(d_tiled_nodes);
+    // cudaFree(d_keys_out);
+    // cudaFree(d_values_out);
+    // cudaFree(d_num_runs_out);
+    // cudaFree(d_FMax_r);
+    // cudaFree(d_MUt);
   }
 
 }

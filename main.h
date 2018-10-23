@@ -37,10 +37,10 @@ namespace ac {
     void SortEdges(
       IntT*, IntT*, IntT*, IntT*, IntT*, IntT);
 
-    void ColumnMax(
+    void RowMax(
       IntT, IntT, FloatT*, FloatT*);
 
-    void ColumnSoftmax(
+    void RowSoftmax(
       IntT, IntT, FloatT*);
 
     void EdgeMaxReduce(
@@ -58,14 +58,14 @@ namespace ac {
     __global__ void EdgePairwiseNorm(
       IntT, IntT, FloatT*, FloatT*, FloatT*, FloatT*, FloatT*, IntT);
 
-    __global__ void RepeatColumnsByPatternEdges(
+    __global__ void RepeatRowsByPatternEdges(
       IntT, IntT, IntT, FloatT*, FloatT*, FloatT*, IntT*, IntT*);
 
-    __global__ void RepeatColumnsByPatternEdgesSubtract(
+    __global__ void RepeatRowsByPatternEdgesSubtract(
       IntT, IntT, IntT, FloatT*, FloatT*, FloatT*, FloatT*, FloatT*, IntT*, IntT*);
 
-    __global__ void RepeatColumnsByDataEdges(
-      IntT, IntT, FloatT*, FloatT*, FloatT*, FloatT*, FloatT*, IntT*);
+    __global__ void RepeatRowsByDataEdges(
+      IntT, IntT, IntT, FloatT*, FloatT*, FloatT*, FloatT*, FloatT*, IntT*);
 
   }
 }

@@ -155,108 +155,110 @@ int main ( int argc, char * argv[] ) {
   );
 
 
-  // // Edge-edge distance matrix
-  // ac::device::EdgePairwiseNorm<<<block_ee, THREAD>>>(
-  //   data.num_edges,
-  //   patt.num_edges,
-  //   CE,
-  //   RE,
-  //   FE,
-  //   data.edge_feats,
-  //   patt.edge_feats,
-  //   data.edge_feat_dim
-  // );
+  // Edge-edge distance matrix
+  ac::device::EdgePairwiseNorm<<<block_ee, THREAD>>>(
+    data.num_edges,
+    patt.num_edges,
+    CE,
+    RE,
+    FE,
+    data.edge_feats,
+    patt.edge_feats,
+    data.edge_feat_dim
+  );
 
   // Normalize distance matrices (could all happen in parallel)
-  ac::host::ColumnSoftmax(patt.num_nodes, data.num_nodes, CV);
-  ac::host::ColumnSoftmax(patt.num_nodes, data.num_nodes, MU);
-  // ac::host::ColumnSoftmax(data.num_edges, patt.num_edges, CE);
-  // ac::host::ColumnSoftmax(data.num_edges, patt.num_edges, RE);
-  // ac::host::ColumnSoftmax(data.num_edges, patt.num_edges, FE);
+  ac::host::RowSoftmax(patt.num_nodes, data.num_nodes, CV);
+  ac::host::RowSoftmax(patt.num_nodes, data.num_nodes, MU);
+  ac::host::RowSoftmax(patt.num_edges, data.num_edges, CE);
+  ac::host::RowSoftmax(patt.num_edges, data.num_edges, RE);
+  ac::host::RowSoftmax(patt.num_edges, data.num_edges, FE);
 
-  // // Repeat columns of MU by pattern edgelist
-  // ac::device::RepeatColumnsByPatternEdges<<<block_ve, THREAD>>>(
-  //   data.num_nodes,
-  //   patt.num_edges,
-  //   patt.num_nodes,
-  //   MU,
-  //   VR,
-  //   VF,
-  //   patt.srcs,
-  //   patt.dsts
-  // );
+  // Repeat columns of MU by pattern edgelist
+  ac::device::RepeatRowsByPatternEdges<<<block_ve, THREAD>>>(
+    data.num_nodes,
+    patt.num_edges,
+    patt.num_nodes,
+    MU,
+    VR,
+    VF,
+    patt.srcs,
+    patt.dsts
+  );
 
   // // Hardcode Cnull to 0
   // // cudaMemset(Cnull, 0, patt.num_edges * sizeof(FloatT));
 
-  // // Compute max over columns of VF/VR
-  // ac::host::ColumnMax(data.num_nodes, patt.num_edges, VF, VFmax);
-  // ac::host::ColumnMax(data.num_nodes, patt.num_edges, VR, VRmax);
+  // Compute max over columns of VF/VR
+  ac::host::RowMax(patt.num_edges, data.num_nodes, VF, VFmax);
+  ac::host::RowMax(patt.num_edges, data.num_nodes, VR, VRmax);
 
-  // // Max reduce over edges adjacent to data nodes
-  // ac::host::EdgeMaxReduce(data.num_edges, data.num_nodes, patt.num_edges,
-  //   VRmax, FE, FMax,
-  //   data.dsts_r, data.map_r
-  // );
+  // Max reduce over edges adjacent to data nodes
+  ac::host::EdgeMaxReduce(data.num_edges, data.num_nodes, patt.num_edges,
+    VRmax, FE, FMax,
+    data.dsts_r, data.map_r
+  );
 
-  // ac::host::EdgeMaxReduce(
-  //   data.num_edges, data.num_nodes, patt.num_edges,
-  //   VFmax, RE, RMax,
-  //   data.srcs, NULL
-  // );
+  ac::host::EdgeMaxReduce(
+    data.num_edges, data.num_nodes, patt.num_edges,
+    VFmax, RE, RMax,
+    data.srcs, NULL
+  );
 
-  // // --
-  // // Run
+  // --
+  // Run
 
-  // for (IntT i = 0; i < patt.num_nodes; i++) {
-  //   // Repeat columns of (MU - FMax) by pattern edgelist
-  //   ac::device::RepeatColumnsByPatternEdgesSubtract<<<block_ve, THREAD>>>(
-  //     data.num_nodes,
-  //     patt.num_edges,
-  //     patt.num_nodes,
-  //     MU,
-  //     VR,
-  //     VF,
-  //     FMax,
-  //     RMax,
-  //     patt.srcs,
-  //     patt.dsts
-  //   );
+  for (IntT i = 0; i < patt.num_nodes; i++) {
+    // Repeat columns of (MU - FMax) by pattern edgelist
+    ac::device::RepeatRowsByPatternEdgesSubtract<<<block_ve, THREAD>>>(
+      data.num_nodes,
+      patt.num_edges,
+      patt.num_nodes,
+      MU,
+      VR,
+      VF,
+      FMax,
+      RMax,
+      patt.srcs,
+      patt.dsts
+    );
 
-  //   // Compute max over columns of VF/VR
-  //   ac::host::ColumnMax(data.num_nodes, patt.num_edges, VF, VFmax);
-  //   ac::host::ColumnMax(data.num_nodes, patt.num_edges, VR, VRmax);
+    // Compute max over columns of VF/VR
+    ac::host::RowMax(patt.num_edges, data.num_nodes, VF, VFmax);
+    ac::host::RowMax(patt.num_edges, data.num_nodes, VR, VRmax);
 
-  //   // Repeat rows of VF/VR by data srcs
-  //   ac::device::RepeatColumnsByDataEdges<<<block_ee, THREAD>>>(
-  //     data.num_edges,
-  //     patt.num_edges,
-  //     CE,
-  //     VR,
-  //     VF,
-  //     FE,
-  //     RE,
-  //     data.srcs
-  //   );
-  //   ac::host::ColumnSoftmax(data.num_edges, patt.num_edges, FE);
-  //   ac::host::ColumnSoftmax(data.num_edges, patt.num_edges, RE);
+    // Repeat rows of VF/VR by data srcs
+    ac::device::RepeatRowsByDataEdges<<<block_ee, THREAD>>>(
+      data.num_edges,
+      patt.num_edges,
+      data.num_nodes,
+      CE,
+      VR,
+      VF,
+      FE,
+      RE,
+      data.srcs
+    );
+    ac::host::RowSoftmax(patt.num_edges, data.num_edges, FE);
+    ac::host::RowSoftmax(patt.num_edges, data.num_edges, RE);
 
-  //   // Max aggregation over edges adjacent to data nodes
-  //   ac::host::EdgeMaxReduce(data.num_edges, data.num_nodes, patt.num_edges,
-  //     VRmax, FE, FMax,
-  //     data.dsts_r, data.map_r
-  //   );
+    // Max aggregation over edges adjacent to data nodes
+    ac::host::EdgeMaxReduce(data.num_edges, data.num_nodes, patt.num_edges,
+      VRmax, FE, FMax,
+      data.dsts_r, data.map_r
+    );
 
-  //   ac::host::EdgeMaxReduce(
-  //     data.num_edges, data.num_nodes, patt.num_edges,
-  //     VFmax, RE, RMax,
-  //     data.srcs, NULL
-  //   );
+    ac::host::EdgeMaxReduce(
+      data.num_edges, data.num_nodes, patt.num_edges,
+      VFmax, RE, RMax,
+      data.srcs, NULL
+    );
 
-  //   // Replace columns of MU w/ sum over FMax/RMax of adjacent edges + subtract CV
-  //   ac::host::ComputeMU(&patt, data.num_nodes, CV, FMax, RMax, MU);
-  //   ac::host::ColumnSoftmax(data.num_nodes, patt.num_nodes, MU);
-  // }
+    // Replace columns of MU w/ sum over FMax/RMax of adjacent edges + subtract CV
+    ac::host::ComputeMU(&patt, data.num_nodes, CV, FMax, RMax, MU);
+    ac::host::RowSoftmax(patt.num_nodes, data.num_nodes, MU);
+    break;
+  }
 
   // --
   // Stop timer
@@ -275,6 +277,42 @@ int main ( int argc, char * argv[] ) {
   cudaMemcpy(h_MU, MU, data.num_nodes * patt.num_nodes * sizeof(FloatT), cudaMemcpyDeviceToHost);
   for (IntT i = 0; i < data.num_nodes * patt.num_nodes; i ++) printf("%f\n", h_MU[i]);
 
+  // FloatT *h_CE = (FloatT *) malloc(data.num_edges * patt.num_edges * sizeof(FloatT));
+  // cudaMemcpy(h_CE, CE, data.num_edges * patt.num_edges * sizeof(FloatT), cudaMemcpyDeviceToHost);
+  // for (IntT i = 0; i < data.num_edges * patt.num_edges; i ++) printf("%f\n", h_CE[i]);
+
+  // FloatT *h_FE = (FloatT *) malloc(data.num_edges * patt.num_edges * sizeof(FloatT));
+  // cudaMemcpy(h_FE, FE, data.num_edges * patt.num_edges * sizeof(FloatT), cudaMemcpyDeviceToHost);
+  // for (IntT i = 0; i < data.num_edges * patt.num_edges; i ++) printf("%f\n", h_FE[i]);
+
+  // FloatT *h_RE = (FloatT *) malloc(data.num_edges * patt.num_edges * sizeof(FloatT));
+  // cudaMemcpy(h_RE, RE, data.num_edges * patt.num_edges * sizeof(FloatT), cudaMemcpyDeviceToHost);
+  // for (IntT i = 0; i < data.num_edges * patt.num_edges; i ++) printf("%f\n", h_RE[i]);
+
+  // FloatT *h_VF = (FloatT *) malloc(data.num_nodes * patt.num_edges * sizeof(FloatT));
+  // cudaMemcpy(h_VF, VF, data.num_nodes * patt.num_edges * sizeof(FloatT), cudaMemcpyDeviceToHost);
+  // for (IntT i = 0; i < data.num_nodes * patt.num_edges; i ++) printf("%f\n", h_VF[i]);
+
+  // FloatT *h_VR = (FloatT *) malloc(data.num_nodes * patt.num_edges * sizeof(FloatT));
+  // cudaMemcpy(h_VR, VR, data.num_nodes * patt.num_edges * sizeof(FloatT), cudaMemcpyDeviceToHost);
+  // for (IntT i = 0; i < data.num_nodes * patt.num_edges; i ++) printf("%f\n", h_VR[i]);
+
+  // FloatT *h_VRmax = (FloatT *) malloc(patt.num_edges * sizeof(FloatT));
+  // cudaMemcpy(h_VRmax, VRmax, patt.num_edges * sizeof(FloatT), cudaMemcpyDeviceToHost);
+  // for (IntT i = 0; i < patt.num_edges; i ++) printf("%f\n", h_VRmax[i]);
+
+  // FloatT *h_VFmax = (FloatT *) malloc(patt.num_edges * sizeof(FloatT));
+  // cudaMemcpy(h_VFmax, VFmax, patt.num_edges * sizeof(FloatT), cudaMemcpyDeviceToHost);
+  // for (IntT i = 0; i < patt.num_edges; i ++) printf("%f\n", h_VFmax[i]);
+
+  // FloatT *h_RMax = (FloatT *) malloc(data.num_nodes * patt.num_edges * sizeof(FloatT));
+  // cudaMemcpy(h_RMax, RMax, data.num_nodes * patt.num_edges * sizeof(FloatT), cudaMemcpyDeviceToHost);
+  // for (IntT i = 0; i < data.num_nodes * patt.num_edges; i ++) printf("%f\n", h_RMax[i]);
+
+  // FloatT *h_FMax = (FloatT *) malloc(data.num_nodes * patt.num_edges * sizeof(FloatT));
+  // cudaMemcpy(h_FMax, FMax, data.num_nodes * patt.num_edges * sizeof(FloatT), cudaMemcpyDeviceToHost);
+  // for (IntT i = 0; i < data.num_nodes * patt.num_edges; i ++) printf("%f\n", h_FMax[i]);
+
   // --
   // Free memory
 
@@ -290,7 +328,7 @@ int main ( int argc, char * argv[] ) {
   cudaFree(VFmax);
   cudaFree(RMax);
   cudaFree(FMax);
-  free(h_MU);
+  // free(h_MU);
 
   return 0;
 }
