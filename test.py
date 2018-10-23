@@ -64,8 +64,6 @@ for _ in range(num_pv):
     vf = mu[pattern_edges[:,1]] - fmax
     vr = mu[pattern_edges[:,0]] - rmax
     
-    # passed
-    
     re = normprob(vf[:,data_edges[:,0]] - ce)
     fe = normprob(vr[:,data_edges[:,0]] - ce)
     
@@ -83,6 +81,7 @@ for _ in range(num_pv):
         mu[src] += rmax[edge_idx]
     
     mu = normprob(mu)
-    # break
+    # passed 1 iter
 
 np.savetxt('python_result_test', np.hstack(mu))
+np.savetxt('python_result', np.hstack(mu.T))

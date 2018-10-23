@@ -257,7 +257,6 @@ int main ( int argc, char * argv[] ) {
     // Replace columns of MU w/ sum over FMax/RMax of adjacent edges + subtract CV
     ac::host::ComputeMU(&patt, data.num_nodes, CV, FMax, RMax, MU);
     ac::host::RowSoftmax(patt.num_nodes, data.num_nodes, MU);
-    // break;
   }
 
   // --
@@ -276,42 +275,6 @@ int main ( int argc, char * argv[] ) {
   FloatT *h_MU = (FloatT *) malloc(data.num_nodes * patt.num_nodes * sizeof(FloatT));
   cudaMemcpy(h_MU, MU, data.num_nodes * patt.num_nodes * sizeof(FloatT), cudaMemcpyDeviceToHost);
   for (IntT i = 0; i < data.num_nodes * patt.num_nodes; i ++) printf("%f\n", h_MU[i]);
-
-  // FloatT *h_CE = (FloatT *) malloc(data.num_edges * patt.num_edges * sizeof(FloatT));
-  // cudaMemcpy(h_CE, CE, data.num_edges * patt.num_edges * sizeof(FloatT), cudaMemcpyDeviceToHost);
-  // for (IntT i = 0; i < data.num_edges * patt.num_edges; i ++) printf("%f\n", h_CE[i]);
-
-  // FloatT *h_FE = (FloatT *) malloc(data.num_edges * patt.num_edges * sizeof(FloatT));
-  // cudaMemcpy(h_FE, FE, data.num_edges * patt.num_edges * sizeof(FloatT), cudaMemcpyDeviceToHost);
-  // for (IntT i = 0; i < data.num_edges * patt.num_edges; i ++) printf("%f\n", h_FE[i]);
-
-  // FloatT *h_RE = (FloatT *) malloc(data.num_edges * patt.num_edges * sizeof(FloatT));
-  // cudaMemcpy(h_RE, RE, data.num_edges * patt.num_edges * sizeof(FloatT), cudaMemcpyDeviceToHost);
-  // for (IntT i = 0; i < data.num_edges * patt.num_edges; i ++) printf("%f\n", h_RE[i]);
-
-  // FloatT *h_VF = (FloatT *) malloc(data.num_nodes * patt.num_edges * sizeof(FloatT));
-  // cudaMemcpy(h_VF, VF, data.num_nodes * patt.num_edges * sizeof(FloatT), cudaMemcpyDeviceToHost);
-  // for (IntT i = 0; i < data.num_nodes * patt.num_edges; i ++) printf("%f\n", h_VF[i]);
-
-  // FloatT *h_VR = (FloatT *) malloc(data.num_nodes * patt.num_edges * sizeof(FloatT));
-  // cudaMemcpy(h_VR, VR, data.num_nodes * patt.num_edges * sizeof(FloatT), cudaMemcpyDeviceToHost);
-  // for (IntT i = 0; i < data.num_nodes * patt.num_edges; i ++) printf("%f\n", h_VR[i]);
-
-  // FloatT *h_VRmax = (FloatT *) malloc(patt.num_edges * sizeof(FloatT));
-  // cudaMemcpy(h_VRmax, VRmax, patt.num_edges * sizeof(FloatT), cudaMemcpyDeviceToHost);
-  // for (IntT i = 0; i < patt.num_edges; i ++) printf("%f\n", h_VRmax[i]);
-
-  // FloatT *h_VFmax = (FloatT *) malloc(patt.num_edges * sizeof(FloatT));
-  // cudaMemcpy(h_VFmax, VFmax, patt.num_edges * sizeof(FloatT), cudaMemcpyDeviceToHost);
-  // for (IntT i = 0; i < patt.num_edges; i ++) printf("%f\n", h_VFmax[i]);
-
-  // FloatT *h_RMax = (FloatT *) malloc(data.num_nodes * patt.num_edges * sizeof(FloatT));
-  // cudaMemcpy(h_RMax, RMax, data.num_nodes * patt.num_edges * sizeof(FloatT), cudaMemcpyDeviceToHost);
-  // for (IntT i = 0; i < data.num_nodes * patt.num_edges; i ++) printf("%f\n", h_RMax[i]);
-
-  // FloatT *h_FMax = (FloatT *) malloc(data.num_nodes * patt.num_edges * sizeof(FloatT));
-  // cudaMemcpy(h_FMax, FMax, data.num_nodes * patt.num_edges * sizeof(FloatT), cudaMemcpyDeviceToHost);
-  // for (IntT i = 0; i < data.num_nodes * patt.num_edges; i ++) printf("%f\n", h_FMax[i]);
 
   // --
   // Free memory
