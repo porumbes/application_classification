@@ -44,7 +44,7 @@ namespace ac {
       IntT, IntT, FloatT*, IntT*);
 
     void EdgeMaxReduce(
-      IntT, IntT, IntT, FloatT*, FloatT*, FloatT*, IntT*, IntT*);
+      IntT, IntT, IntT, FloatT*, FloatT*, FloatT*, IntT*, IntT*, FloatT*, FloatT*);
 
     void ComputeMU(
       Graph*, IntT, FloatT*, FloatT*, FloatT*, FloatT*);

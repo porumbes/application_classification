@@ -216,18 +216,22 @@ int main ( int argc, char * argv[] ) {
   // Max reduce over edges adjacent to data nodes
 
   FloatT *d_XEt;
+  FloatT *d_XEr;
   cudaMalloc((void**)&d_XEt, data.num_edges * patt.num_edges * sizeof(FloatT));
+  cudaMalloc((void**)&d_XEr, data.num_edges * patt.num_edges * sizeof(FloatT));
 
   ac::host::EdgeMaxReduce(
     data.num_edges, data.num_nodes, patt.num_edges,
     VRmax, FE, FMax,
-    data.dsts_r, data.map_r
+    data.dsts_r, data.map_r,
+    d_XEt, d_XEr
   );
 
   ac::host::EdgeMaxReduce(
     data.num_edges, data.num_nodes, patt.num_edges,
     VFmax, RE, RMax,
-    data.srcs, NULL
+    data.srcs, NULL,
+    d_XEt, d_XEr
   );
 
   // --
@@ -270,13 +274,15 @@ int main ( int argc, char * argv[] ) {
     // Max aggregation over edges adjacent to data nodes
     ac::host::EdgeMaxReduce(data.num_edges, data.num_nodes, patt.num_edges,
       VRmax, FE, FMax,
-      data.dsts_r, data.map_r
+      data.dsts_r, data.map_r,
+      d_XEt, d_XEr
     );
 
     ac::host::EdgeMaxReduce(
       data.num_edges, data.num_nodes, patt.num_edges,
       VFmax, RE, RMax,
-      data.srcs, NULL
+      data.srcs,
+      d_XEt, d_XEr
     );
 
     // Replace columns of MU w/ sum over FMax/RMax of adjacent edges + subtract CV

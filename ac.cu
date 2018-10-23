@@ -333,7 +333,7 @@ namespace host {
   }
 
   void EdgeMaxReduce(IntT num_rows_in, IntT num_rows_out, IntT num_cols,
-    FloatT* d_VYmax, FloatT* d_XE, FloatT* d_XMax, IntT* nodes, IntT* map=NULL) {
+    FloatT* d_VYmax, FloatT* d_XE, FloatT* d_XMax, IntT* nodes, IntT* map, FloatT* d_XEt, FloatT* d_XEr) {
 
     void     *d_temp_storage = NULL;
     size_t   temp_storage_bytes = 0;
@@ -346,8 +346,8 @@ namespace host {
     // --------------------------------------
     // Transpose
 
-    FloatT *d_XEt;
-    cudaMalloc((void**)&d_XEt, num_rows_in * num_cols * sizeof(FloatT));
+    // FloatT *d_XEt;
+    // cudaMalloc((void**)&d_XEt, num_rows_in * num_cols * sizeof(FloatT));
     cudaMemcpy(d_XEt, d_XE, num_rows_in * num_cols * sizeof(FloatT), cudaMemcpyDeviceToDevice);
 
     // --------------------------------------
@@ -362,11 +362,11 @@ namespace host {
     // Reorder data (optional)
 
     if(map != NULL) {
-      FloatT *d_XEr;
-      cudaMalloc((void**)&d_XEr, num_rows_in * num_cols * sizeof(FloatT));
+      // FloatT *d_XEr;
+      // cudaMalloc((void**)&d_XEr, num_rows_in * num_cols * sizeof(FloatT));
       __reorderColumns<<<block_rowin_col, THREAD>>>(d_XEr, d_XEt, map, num_rows_in, num_rows_in * num_cols);
       cudaMemcpy(d_XEt, d_XEr, num_rows_in * num_cols * sizeof(FloatT), cudaMemcpyDeviceToDevice);
-      cudaFree(d_XEr);
+      // cudaFree(d_XEr);
     }
 
     // --------------------------------------
@@ -402,7 +402,7 @@ namespace host {
     // -------------------------------------
     // Free memory
 
-    cudaFree(d_XEt);
+    // cudaFree(d_XEt);
     cudaFree(d_tiled_nodes);
     cudaFree(d_temp_storage);
     cudaFree(d_keys_out);
