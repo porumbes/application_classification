@@ -38,10 +38,10 @@ namespace ac {
       IntT*, IntT*, IntT*, IntT*, IntT*, IntT);
 
     void RowMax(
-      IntT, IntT, FloatT*, FloatT*);
+      IntT, IntT, FloatT*, FloatT*, IntT*);
 
     void RowSoftmax(
-      IntT, IntT, FloatT*);
+      IntT, IntT, FloatT*, IntT*);
 
     void EdgeMaxReduce(
       IntT, IntT, IntT, FloatT*, FloatT*, FloatT*, IntT*, IntT*);

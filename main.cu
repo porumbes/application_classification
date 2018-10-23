@@ -138,6 +138,26 @@ int main ( int argc, char * argv[] ) {
   cudaEventRecord(start, 0);
 
   // --
+  // Precompute offsets
+
+  IntT *h_vv_offsets = (IntT*)malloc((patt.num_nodes + 1) * sizeof(IntT));
+  IntT *h_ee_offsets = (IntT*)malloc((patt.num_edges + 1) * sizeof(IntT));
+  IntT *h_ev_offsets = (IntT*)malloc((patt.num_edges + 1) * sizeof(IntT));
+
+  IntT *vv_offsets, *ee_offsets, *ev_offsets;
+  cudaMalloc((void**)&vv_offsets, (patt.num_nodes + 1) * sizeof(IntT));
+  cudaMalloc((void**)&ee_offsets, (patt.num_edges + 1) * sizeof(IntT));
+  cudaMalloc((void**)&ev_offsets, (patt.num_edges + 1) * sizeof(IntT));
+
+  for(IntT i = 0; i < patt.num_nodes + 1; i++) h_vv_offsets[i] = i * data.num_nodes;
+  for(IntT i = 0; i < patt.num_edges + 1; i++) h_ee_offsets[i] = i * data.num_edges;
+  for(IntT i = 0; i < patt.num_edges + 1; i++) h_ev_offsets[i] = i * data.num_nodes;
+
+  cudaMemcpy(vv_offsets, h_vv_offsets, (patt.num_nodes + 1) * sizeof(IntT), cudaMemcpyHostToDevice);
+  cudaMemcpy(ee_offsets, h_ee_offsets, (patt.num_edges + 1) * sizeof(IntT), cudaMemcpyHostToDevice);
+  cudaMemcpy(ev_offsets, h_ev_offsets, (patt.num_edges + 1) * sizeof(IntT), cudaMemcpyHostToDevice);
+
+  // --
   // Initialize algorithm
 
   ac::host::SortEdges(data.srcs, data.dsts, data.srcs_r, data.dsts_r, data.map_r, data.num_edges);
@@ -168,11 +188,11 @@ int main ( int argc, char * argv[] ) {
   );
 
   // Normalize distance matrices (could all happen in parallel)
-  ac::host::RowSoftmax(patt.num_nodes, data.num_nodes, CV);
-  ac::host::RowSoftmax(patt.num_nodes, data.num_nodes, MU);
-  ac::host::RowSoftmax(patt.num_edges, data.num_edges, CE);
-  ac::host::RowSoftmax(patt.num_edges, data.num_edges, RE);
-  ac::host::RowSoftmax(patt.num_edges, data.num_edges, FE);
+  ac::host::RowSoftmax(patt.num_nodes, data.num_nodes, CV, vv_offsets);
+  ac::host::RowSoftmax(patt.num_nodes, data.num_nodes, MU, vv_offsets);
+  ac::host::RowSoftmax(patt.num_edges, data.num_edges, CE, ee_offsets);
+  ac::host::RowSoftmax(patt.num_edges, data.num_edges, RE, ee_offsets);
+  ac::host::RowSoftmax(patt.num_edges, data.num_edges, FE, ee_offsets);
 
   // Repeat columns of MU by pattern edgelist
   ac::device::RepeatRowsByPatternEdges<<<block_ve, THREAD>>>(
@@ -190,8 +210,8 @@ int main ( int argc, char * argv[] ) {
   // // cudaMemset(Cnull, 0, patt.num_edges * sizeof(FloatT));
 
   // Compute max over columns of VF/VR
-  ac::host::RowMax(patt.num_edges, data.num_nodes, VF, VFmax);
-  ac::host::RowMax(patt.num_edges, data.num_nodes, VR, VRmax);
+  ac::host::RowMax(patt.num_edges, data.num_nodes, VF, VFmax, ev_offsets);
+  ac::host::RowMax(patt.num_edges, data.num_nodes, VR, VRmax, ev_offsets);
 
   // Max reduce over edges adjacent to data nodes
   ac::host::EdgeMaxReduce(data.num_edges, data.num_nodes, patt.num_edges,
@@ -224,8 +244,8 @@ int main ( int argc, char * argv[] ) {
     );
 
     // Compute max over columns of VF/VR
-    ac::host::RowMax(patt.num_edges, data.num_nodes, VF, VFmax);
-    ac::host::RowMax(patt.num_edges, data.num_nodes, VR, VRmax);
+    ac::host::RowMax(patt.num_edges, data.num_nodes, VF, VFmax, ev_offsets);
+    ac::host::RowMax(patt.num_edges, data.num_nodes, VR, VRmax, ev_offsets);
 
     // Repeat rows of VF/VR by data srcs
     ac::device::RepeatRowsByDataEdges<<<block_ee, THREAD>>>(
@@ -239,8 +259,8 @@ int main ( int argc, char * argv[] ) {
       RE,
       data.srcs
     );
-    ac::host::RowSoftmax(patt.num_edges, data.num_edges, FE);
-    ac::host::RowSoftmax(patt.num_edges, data.num_edges, RE);
+    ac::host::RowSoftmax(patt.num_edges, data.num_edges, FE, ee_offsets);
+    ac::host::RowSoftmax(patt.num_edges, data.num_edges, RE, ee_offsets);
 
     // Max aggregation over edges adjacent to data nodes
     ac::host::EdgeMaxReduce(data.num_edges, data.num_nodes, patt.num_edges,
@@ -256,7 +276,7 @@ int main ( int argc, char * argv[] ) {
 
     // Replace columns of MU w/ sum over FMax/RMax of adjacent edges + subtract CV
     ac::host::ComputeMU(&patt, data.num_nodes, CV, FMax, RMax, MU);
-    ac::host::RowSoftmax(patt.num_nodes, data.num_nodes, MU);
+    ac::host::RowSoftmax(patt.num_nodes, data.num_nodes, MU, vv_offsets);
   }
 
   // --

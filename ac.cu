@@ -111,21 +111,12 @@ __global__ void __reorderColumns(FloatT* d_out, FloatT* d_in, IntT* d_map_r, Int
 
 template<typename Op>
 void __row_reduce(FloatT * d_out, FloatT * d_in, IntT num_rows, IntT num_cols,
-  Op reduce_op, double initial_value) {
+  Op reduce_op, double initial_value, IntT* d_offsets) {
 
   // Max over rows of matrix
 
   void *d_temp_storage = NULL;
   size_t temp_storage_bytes = 0;
-
-  // Compute offsets of matrix
-  IntT *h_offsets = (IntT*)malloc((num_rows + 1) * sizeof(IntT));
-  for(IntT i = 0; i < num_rows + 1; i++) {
-    h_offsets[i] = i * num_cols;
-  }
-  IntT *d_offsets;
-  cudaMalloc((void**)&d_offsets, (num_rows + 1) * sizeof(IntT));
-  cudaMemcpy(d_offsets, h_offsets, (num_rows + 1) * sizeof(IntT), cudaMemcpyHostToDevice);
 
   // Max over rows
   cub::DeviceSegmentedReduce::Reduce(d_temp_storage, temp_storage_bytes,
@@ -134,7 +125,6 @@ void __row_reduce(FloatT * d_out, FloatT * d_in, IntT num_rows, IntT num_cols,
   cub::DeviceSegmentedReduce::Reduce(d_temp_storage, temp_storage_bytes,
     d_in, d_out, num_rows, d_offsets, d_offsets + 1, reduce_op, initial_value);
 
-  cudaFree(d_offsets);
   cudaFree(d_temp_storage);
 }
 
@@ -297,18 +287,13 @@ namespace host {
     cudaFree(map);
   }
 
-  void RowMax(IntT num_rows, IntT num_cols, FloatT* d_in, FloatT* d_out) {
+  void RowMax(IntT num_rows, IntT num_cols, FloatT* d_in, FloatT* d_out, IntT* d_offsets) {
     IntT block = 1 + (num_rows * num_cols) / THREAD;
     assert(THREAD * block > num_rows * num_cols);
-
-    // FloatT *d_in_t;
-    // cudaMalloc((void**)&d_in_t, num_rows * num_cols * sizeof(FloatT));
-    // __transpose<<<block, THREAD>>>(d_in_t, d_in, num_rows, num_cols);
-    __row_reduce(d_out, d_in, num_rows, num_cols, cub::Max(), -DBL_MAX);
-    // cudaFree(d_in_t);
+    __row_reduce(d_out, d_in, num_rows, num_cols, cub::Max(), -DBL_MAX, d_offsets);
   }
 
-  void RowSoftmax(const IntT num_rows, const IntT num_cols, FloatT *d_x) {
+  void RowSoftmax(const IntT num_rows, const IntT num_cols, FloatT *d_x, IntT* d_offsets) {
     // Compute softmax over columns
 
     // --------------------------
@@ -323,10 +308,7 @@ namespace host {
     // ----------------------------
     // Compute column max
 
-    // FloatT *d_xt;
-    // cudaMalloc((void**)&d_xt, num_rows * num_cols * sizeof(FloatT));
-    // __transpose<<<block, THREAD>>>(d_xt, d_x, num_rows, num_cols);
-    __row_reduce(d_storage, d_x, num_rows, num_cols, cub::Max(), -DBL_MAX);
+    __row_reduce(d_storage, d_x, num_rows, num_cols, cub::Max(), -DBL_MAX, d_offsets);
 
     // --------------------------------
     // Subtract max from columns
@@ -337,7 +319,7 @@ namespace host {
     // Sum columns
 
     cudaMemset(d_storage, 0, num_cols * sizeof(FloatT));
-    __row_reduce(d_storage, d_x, num_rows, num_cols, cub::Sum(), 0);
+    __row_reduce(d_storage, d_x, num_rows, num_cols, cub::Sum(), 0, d_offsets);
 
     // ---------------------------------
     // Subtract log-sum from columns
