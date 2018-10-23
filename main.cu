@@ -129,6 +129,15 @@ int main ( int argc, char * argv[] ) {
   IntT block_ve = 1 + (data.num_nodes * patt.num_edges) / THREAD;
 
   // --
+  // Start timer
+
+  cudaEvent_t start, stop;
+  float milliseconds = 0;
+  cudaEventCreate(&start);
+  cudaEventCreate(&stop);
+  cudaEventRecord(start, 0);
+
+  // --
   // Initialize algorithm
 
   ac::host::SortEdges(data.srcs, data.dsts, data.srcs_r, data.dsts_r, data.map_r, data.num_edges);
@@ -248,6 +257,16 @@ int main ( int argc, char * argv[] ) {
     ac::host::ComputeMU(&patt, data.num_nodes, CV, FMax, RMax, MU);
     ac::host::ColumnSoftmax(data.num_nodes, patt.num_nodes, MU);
   }
+
+  // --
+  // Stop timer
+
+  cudaEventRecord(stop, 0);
+  cudaEventSynchronize(stop);
+  cudaEventElapsedTime(&milliseconds, start, stop);
+  cudaEventDestroy(start);
+  cudaEventDestroy(stop);
+  std::cerr << "elapsed_ms=" << milliseconds << std::endl;
 
   // --
   // Copy results to host and print

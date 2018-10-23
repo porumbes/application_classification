@@ -21,14 +21,13 @@ python validate.py
 # --
 # Test rmat
 
-# DATA_PATH="/home/bjohnson/scratch/ApplicationClassification/data"
-# make clean
-# make
-# rm -f orig_result
-# time ./main \
-#     $DATA_PATH/rmat18.Vertex.csv \
-#     $DATA_PATH/rmat18.Edges.csv \
-#     $DATA_PATH/georgiyPattern.Vertex.csv \
-#     $DATA_PATH/georgiyPattern.Edges.csv > orig_result
+make clean
+make
+rm -f orig_result
+time ./main \
+    data/rmat18.Vertex.csv \
+    data/rmat18.Edges.csv \
+    data/georgiyPattern.Vertex.csv \
+    data/georgiyPattern.Edges.csv > orig_result
 
-# cat orig_result | openssl md5
+cat orig_result | openssl md5
