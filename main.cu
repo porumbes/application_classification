@@ -214,7 +214,12 @@ int main ( int argc, char * argv[] ) {
   ac::host::RowMax(patt.num_edges, data.num_nodes, VR, VRmax, ev_offsets);
 
   // Max reduce over edges adjacent to data nodes
-  ac::host::EdgeMaxReduce(data.num_edges, data.num_nodes, patt.num_edges,
+
+  FloatT *d_XEt;
+  cudaMalloc((void**)&d_XEt, data.num_edges * patt.num_edges * sizeof(FloatT));
+
+  ac::host::EdgeMaxReduce(
+    data.num_edges, data.num_nodes, patt.num_edges,
     VRmax, FE, FMax,
     data.dsts_r, data.map_r
   );

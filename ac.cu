@@ -327,14 +327,8 @@ namespace host {
     __rowSubLog<<<block, THREAD>>>(d_x, num_rows, num_cols, d_storage);
 
     // ---------------------------------
-    // Transpose back to original shape
-
-    // __transpose<<<block, THREAD>>>(d_x, d_xt, num_cols, num_rows);
-
-    // ---------------------------------
     // Free memory
 
-    // cudaFree(d_xt);
     cudaFree(d_storage);
   }
 
@@ -355,7 +349,6 @@ namespace host {
     FloatT *d_XEt;
     cudaMalloc((void**)&d_XEt, num_rows_in * num_cols * sizeof(FloatT));
     cudaMemcpy(d_XEt, d_XE, num_rows_in * num_cols * sizeof(FloatT), cudaMemcpyDeviceToDevice);
-    // __transpose<<<block_rowin_col, THREAD>>>(d_XEt, d_XE, num_rows_in, num_cols);
 
     // --------------------------------------
     // Tile dsts (w/ offset)
@@ -399,7 +392,6 @@ namespace host {
 
     __fillLow<<<block_rowout_col, THREAD>>>(d_XMax, num_cols * num_rows_out);
     __vectorScatterMax<<<block_rowout_col, THREAD>>>(d_XMax, d_keys_out, d_values_out, d_num_runs_out);
-    // __transposeWithKey<<<block_rowout_col, THREAD>>>(d_XMax, d_values_out, d_keys_out, d_num_runs_out, num_cols, num_rows_out);
 
     // --------------------------------------
     // Elementwise max w/ V*max
@@ -512,13 +504,13 @@ namespace host {
     // --------------------------------------
     // Free memory
 
-    // cudaFree(d_temp_storage);
-    // cudaFree(d_tiled_nodes);
-    // cudaFree(d_keys_out);
-    // cudaFree(d_values_out);
-    // cudaFree(d_num_runs_out);
-    // cudaFree(d_FMax_r);
-    // cudaFree(d_MUt);
+    cudaFree(d_temp_storage);
+    cudaFree(d_tiled_nodes);
+    cudaFree(d_keys_out);
+    cudaFree(d_values_out);
+    cudaFree(d_num_runs_out);
+    cudaFree(d_FMax_r);
+    cudaFree(d_MUt);
   }
 
 }
