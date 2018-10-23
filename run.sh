@@ -2,20 +2,20 @@
 
 # run.sh
 
-make clean && make
-rm -f orig_result
-./main \
-    ./data/georgiyData.Vertex.csv \
-    ./data/georgiyData.Edges.csv \
-    ./data/georgiyPattern.Vertex.csv \
-    ./data/georgiyPattern.Edges.csv > orig_result
+# make clean && make
+# rm -f cuda_result
+# ./main \
+#     ./data/georgiyData.Vertex.csv \
+#     ./data/georgiyData.Edges.csv \
+#     ./data/georgiyPattern.Vertex.csv \
+#     ./data/georgiyPattern.Edges.csv > cuda_result
 
-cat orig_result | openssl md5
-echo "(stdin)= bd57a5126d5f943ad5c15408d410790d"
+# cat cuda_result | openssl md5
+# echo "(stdin)= bd57a5126d5f943ad5c15408d410790d"
 
-rm -f python_result
-python test.py
-python validate.py
+# rm -f python_result
+# python test.py
+# python validate.py
 
 
 # --
@@ -23,11 +23,11 @@ python validate.py
 
 make clean
 make
-rm -f orig_result
+rm -f cuda_result
 time ./main \
     data/rmat18.Vertex.csv \
     data/rmat18.Edges.csv \
     data/georgiyPattern.Vertex.csv \
-    data/georgiyPattern.Edges.csv > orig_result
+    data/georgiyPattern.Edges.csv > cuda_result
 
-cat orig_result | openssl md5
+cat cuda_result | openssl md5
