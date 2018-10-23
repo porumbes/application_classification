@@ -83,6 +83,6 @@ for _ in range(num_pv):
         mu[src] += rmax[edge_idx]
     
     mu = normprob(mu)
-    break
+    # break
 
 np.savetxt('python_result_test', np.hstack(mu))

@@ -257,7 +257,7 @@ int main ( int argc, char * argv[] ) {
     // Replace columns of MU w/ sum over FMax/RMax of adjacent edges + subtract CV
     ac::host::ComputeMU(&patt, data.num_nodes, CV, FMax, RMax, MU);
     ac::host::RowSoftmax(patt.num_nodes, data.num_nodes, MU);
-    break;
+    // break;
   }
 
   // --
