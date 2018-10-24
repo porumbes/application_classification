@@ -138,7 +138,7 @@ int main ( int argc, char * argv[] ) {
   cudaEventRecord(start, 0);
 
   // --
-  // Precompute offsets
+  // Precompute helper data structures; preallocate memory
 
   IntT *h_vv_offsets = (IntT*)malloc((patt.num_nodes + 1) * sizeof(IntT));
   IntT *h_ee_offsets = (IntT*)malloc((patt.num_edges + 1) * sizeof(IntT));
@@ -156,6 +156,16 @@ int main ( int argc, char * argv[] ) {
   cudaMemcpy(vv_offsets, h_vv_offsets, (patt.num_nodes + 1) * sizeof(IntT), cudaMemcpyHostToDevice);
   cudaMemcpy(ee_offsets, h_ee_offsets, (patt.num_edges + 1) * sizeof(IntT), cudaMemcpyHostToDevice);
   cudaMemcpy(ev_offsets, h_ev_offsets, (patt.num_edges + 1) * sizeof(IntT), cudaMemcpyHostToDevice);
+
+  FloatT *MUt;
+  FloatT *RMaxt;
+  FloatT *FMaxr;
+  FloatT *FMaxt;
+
+  cudaMalloc((void**)&MUt,   patt.num_nodes * data.num_nodes * sizeof(FloatT));
+  cudaMalloc((void**)&RMaxt, patt.num_edges * data.num_nodes * sizeof(FloatT));
+  cudaMalloc((void**)&FMaxr, patt.num_edges * data.num_nodes * sizeof(FloatT));
+  cudaMalloc((void**)&FMaxt, patt.num_edges * data.num_nodes * sizeof(FloatT));
 
   // --
   // Initialize algorithm
@@ -286,7 +296,10 @@ int main ( int argc, char * argv[] ) {
     );
 
     // Replace columns of MU w/ sum over FMax/RMax of adjacent edges + subtract CV
-    ac::host::ComputeMU(&patt, data.num_nodes, CV, FMax, RMax, MU);
+    ac::host::ComputeMU(
+      &patt, data.num_nodes, CV, FMax, RMax, MU,
+      MUt, RMaxt, FMaxt, FMaxr
+    );
     ac::host::RowSoftmax(patt.num_nodes, data.num_nodes, MU, vv_offsets);
   }
 
@@ -326,7 +339,15 @@ int main ( int argc, char * argv[] ) {
   cudaFree(VFmax);
   cudaFree(RMax);
   cudaFree(FMax);
-  // free(h_MU);
+
+  cudaFree(XEt);
+  cudaFree(XEr);
+  cudaFree(MUt);
+  cudaFree(RMaxt);
+  cudaFree(FMaxr);
+  cudaFree(FMaxt);
+
+  free(h_MU);
 
   return 0;
 }

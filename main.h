@@ -47,7 +47,7 @@ namespace ac {
       IntT, IntT, IntT, FloatT*, FloatT*, FloatT*, IntT*, IntT*, FloatT*, FloatT*);
 
     void ComputeMU(
-      Graph*, IntT, FloatT*, FloatT*, FloatT*, FloatT*);
+      Graph*, IntT, FloatT*, FloatT*, FloatT*, FloatT*, FloatT*, FloatT*, FloatT*, FloatT*);
 
   }
   namespace device {

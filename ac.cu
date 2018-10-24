@@ -346,8 +346,6 @@ namespace host {
     // --------------------------------------
     // Transpose
 
-    // FloatT *d_XEt;
-    // cudaMalloc((void**)&d_XEt, num_rows_in * num_cols * sizeof(FloatT));
     cudaMemcpy(d_XEt, d_XE, num_rows_in * num_cols * sizeof(FloatT), cudaMemcpyDeviceToDevice);
 
     // --------------------------------------
@@ -362,11 +360,8 @@ namespace host {
     // Reorder data (optional)
 
     if(map != NULL) {
-      // FloatT *d_XEr;
-      // cudaMalloc((void**)&d_XEr, num_rows_in * num_cols * sizeof(FloatT));
       __reorderColumns<<<block_rowin_col, THREAD>>>(d_XEr, d_XEt, map, num_rows_in, num_rows_in * num_cols);
       cudaMemcpy(d_XEt, d_XEr, num_rows_in * num_cols * sizeof(FloatT), cudaMemcpyDeviceToDevice);
-      // cudaFree(d_XEr);
     }
 
     // --------------------------------------
@@ -411,7 +406,8 @@ namespace host {
   }
 
 
-  void ComputeMU(Graph * patt, IntT DV, FloatT * d_CV, FloatT * d_FMax, FloatT * d_RMax, FloatT * d_MU) {
+  void ComputeMU(Graph * patt, IntT DV, FloatT * d_CV, FloatT * d_FMax, FloatT * d_RMax, FloatT * d_MU,
+    FloatT * d_MUt, FloatT * d_RMaxt, FloatT * d_FMaxt, FloatT * d_FMaxr) {
     // Replace columns of MU w/ sum over FMax/RMax of adjacent edges + subtract CV
 
     void     *d_temp_storage = NULL;
@@ -431,8 +427,6 @@ namespace host {
 
     __scalarMultiply<<<block_dv_pv, THREAD>>>(d_MU, d_CV, (FloatT)-1.0, DV * PV);
 
-    FloatT *d_MUt;
-    cudaMalloc((void**)&d_MUt, PV * DV * sizeof(FloatT));
     __transpose<<<block_dv_pv, THREAD>>>(d_MUt, d_MU, PV, DV);
 
     // --------------------------------------------
@@ -445,9 +439,7 @@ namespace host {
     // --------------------------------------------
     // Sum over rows of matrix
 
-    FloatT *d_RMax_t;
-    cudaMalloc((void**)&d_RMax_t, PE * DV * sizeof(FloatT));
-    __transpose<<<block_dv_pe, THREAD>>>(d_RMax_t, d_RMax, PE, DV);
+    __transpose<<<block_dv_pe, THREAD>>>(d_RMaxt, d_RMax, PE, DV);
 
     IntT   *d_keys_out;
     FloatT *d_values_out;
@@ -458,11 +450,10 @@ namespace host {
     cudaMalloc((void**)&d_num_runs_out,   1 * sizeof(IntT));
 
     cub::DeviceReduce::ReduceByKey(d_temp_storage, temp_storage_bytes,
-      d_tiled_nodes, d_keys_out, d_RMax_t, d_values_out, d_num_runs_out, cub::Sum(), DV * PE);
+      d_tiled_nodes, d_keys_out, d_RMaxt, d_values_out, d_num_runs_out, cub::Sum(), DV * PE);
     cudaMalloc(&d_temp_storage, temp_storage_bytes);
     cub::DeviceReduce::ReduceByKey(d_temp_storage, temp_storage_bytes,
-      d_tiled_nodes, d_keys_out, d_RMax_t, d_values_out, d_num_runs_out, cub::Sum(), DV * PE);
-    cudaFree(d_RMax_t);
+      d_tiled_nodes, d_keys_out, d_RMaxt, d_values_out, d_num_runs_out, cub::Sum(), DV * PE);
 
     // --------------------------------------------
     // (Scatter) Add to MU
@@ -477,24 +468,18 @@ namespace host {
     // --------------------------------------
     // Reorder data
 
-    FloatT *d_FMax_t;
-    cudaMalloc((void**)&d_FMax_t, PE * DV * sizeof(FloatT));
-    __transpose<<<block_dv_pe, THREAD>>>(d_FMax_t, d_FMax, PE, DV);
-
-    FloatT *d_FMax_r;
-    cudaMalloc((void**)&d_FMax_r, DV * PE * sizeof(FloatT));
-    __reorderColumns<<<block_dv_pe, THREAD>>>(d_FMax_r, d_FMax_t, patt->map_r, PE, DV * PE);
-    cudaFree(d_FMax_t);
+    __transpose<<<block_dv_pe, THREAD>>>(d_FMaxt, d_FMax, PE, DV);
+    __reorderColumns<<<block_dv_pe, THREAD>>>(d_FMaxr, d_FMaxt, patt->map_r, PE, DV * PE);
 
     // --------------------------------------
     // Sum reduce
 
     d_temp_storage = NULL; temp_storage_bytes = 0;
     cub::DeviceReduce::ReduceByKey(d_temp_storage, temp_storage_bytes,
-      d_tiled_nodes, d_keys_out, d_FMax_r, d_values_out, d_num_runs_out, cub::Sum(), DV * PE);
+      d_tiled_nodes, d_keys_out, d_FMaxr, d_values_out, d_num_runs_out, cub::Sum(), DV * PE);
     cudaMalloc(&d_temp_storage, temp_storage_bytes);
     cub::DeviceReduce::ReduceByKey(d_temp_storage, temp_storage_bytes,
-      d_tiled_nodes, d_keys_out, d_FMax_r, d_values_out, d_num_runs_out, cub::Sum(), DV * PE);
+      d_tiled_nodes, d_keys_out, d_FMaxr, d_values_out, d_num_runs_out, cub::Sum(), DV * PE);
 
     // (Scatter) add to d_MUt
     __vectorScatterAdd<<<block_dv_pv, THREAD>>>(d_MUt, d_keys_out, d_values_out, d_num_runs_out);
@@ -509,10 +494,7 @@ namespace host {
     cudaFree(d_keys_out);
     cudaFree(d_values_out);
     cudaFree(d_num_runs_out);
-    cudaFree(d_FMax_r);
-    cudaFree(d_MUt);
   }
-
 }
 
 }
