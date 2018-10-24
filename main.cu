@@ -348,6 +348,9 @@ int main ( int argc, char * argv[] ) {
   cudaFree(FMaxt);
 
   free(h_MU);
+  free(h_vv_offsets);
+  free(h_ee_offsets);
+  free(h_ev_offsets);
 
   return 0;
 }
