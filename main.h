@@ -37,30 +37,10 @@ typedef struct Graph {
 namespace ac {
   namespace host {
 
-    void SortEdges(
-      IntT*, IntT*, IntT*, IntT*, IntT*, IntT);
-
-    void ColumnMax(
-      IntT, IntT, FloatT*, FloatT*);
-
-    void ColumnMax2(
-      IntT, IntT, FloatT*, FloatT*);
-
-    void ColumnSoftmax(
-      IntT, IntT, FloatT*);
-
-    void ColumnSoftmax2(
-      IntT, IntT, FloatT*);
-
-    void EdgeMaxReduce2(
-      IntT, IntT, IntT, FloatT*, FloatT*, FloatT*, IntT*);
-
-    void EdgeMaxReduce(
-      IntT, IntT, IntT, FloatT*, FloatT*, FloatT*, IntT*, IntT*);
-
-    void ComputeMU(
-      Graph*, IntT, FloatT*, FloatT*, FloatT*, FloatT*);
-
+    void ColumnMax2(Int, Int, Real*, Real*);
+    void ColumnSoftmax2(Int, Int, Real*);
+    void ColumnSoftmax2_prealloc(Int, Int, Real*, Real*);
+    void EdgeMaxReduce2(Int, Int, Int, Real*, Real*, Real*, Int*);
     void ComputeMU2(
       Int row_in,
       Int col_in,
@@ -74,6 +54,20 @@ namespace ac {
       Real* MU
     );
     
+    void SortEdges(
+      IntT*, IntT*, IntT*, IntT*, IntT*, IntT);
+
+    void ColumnMax(
+      IntT, IntT, FloatT*, FloatT*);
+
+    void ColumnSoftmax(
+      IntT, IntT, FloatT*);
+
+    void EdgeMaxReduce(
+      IntT, IntT, IntT, FloatT*, FloatT*, FloatT*, IntT*, IntT*);
+
+    void ComputeMU(
+      Graph*, IntT, FloatT*, FloatT*, FloatT*, FloatT*);
   }
   namespace device {
 
