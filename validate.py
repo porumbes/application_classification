@@ -1,5 +1,4 @@
 import numpy as np
-from rsub import *
 from matplotlib import pyplot as plt
 
 a = [float(aa) for aa in open('python_result').read().split()]

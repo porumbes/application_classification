@@ -13,6 +13,9 @@
 typedef uint64_t IntT;
 typedef double FloatT;
 
+typedef IntT Int;
+typedef FloatT Real;
+
 typedef struct Graph {
   IntT    num_nodes;
   IntT    node_feat_dim;
@@ -40,8 +43,17 @@ namespace ac {
     void ColumnMax(
       IntT, IntT, FloatT*, FloatT*);
 
+    void ColumnMax2(
+      IntT, IntT, FloatT*, FloatT*);
+
     void ColumnSoftmax(
       IntT, IntT, FloatT*);
+
+    void ColumnSoftmax2(
+      IntT, IntT, FloatT*);
+
+    void EdgeMaxReduce2(
+      IntT, IntT, IntT, FloatT*, FloatT*, FloatT*, IntT*);
 
     void EdgeMaxReduce(
       IntT, IntT, IntT, FloatT*, FloatT*, FloatT*, IntT*, IntT*);
@@ -49,6 +61,19 @@ namespace ac {
     void ComputeMU(
       Graph*, IntT, FloatT*, FloatT*, FloatT*, FloatT*);
 
+    void ComputeMU2(
+      Int row_in,
+      Int col_in,
+      Int row_out,
+      Int col_out,
+      Real* CV,
+      Real* FMax,
+      Real* RMax,
+      Int* srcs,
+      Int* dsts,
+      Real* MU
+    );
+    
   }
   namespace device {
 

@@ -2,8 +2,23 @@
 #include <assert.h>
 #include "main.h"
 #include <cub/cub.cuh>
+#include "thrust/device_vector.h"
 
 #define THREAD 1024
+
+__device__ static double atomicMax(double* address, double value) {
+  unsigned long long* addr_as_longlong =
+      reinterpret_cast<unsigned long long*>(address);
+  unsigned long long old = *addr_as_longlong;
+  unsigned long long expected;
+  do {
+    expected = old;
+    old = ::atomicCAS(
+        addr_as_longlong, expected,
+        __double_as_longlong(::fmax(value, __longlong_as_double(expected))));
+  } while (expected != old);
+  return __longlong_as_double(old);
+}
 
 namespace ac {
 
@@ -289,6 +304,18 @@ namespace host {
     cudaFree(map);
   }
 
+  void ColumnMax2(Int num_rows, Int num_cols, Real* d_in, Real* d_out) {
+    auto op = [=]__device__(Int const& offset) {
+      Int j = offset % num_cols;
+      atomicMax(d_out + j, d_in[offset]);
+    };
+    
+    auto it_start = thrust::make_counting_iterator<Int>(0);
+    auto it_end   = thrust::make_counting_iterator<Int>(num_rows * num_cols);
+    thrust::fill_n(thrust::device, d_out, num_cols, -999999);
+    thrust::for_each(thrust::device, it_start, it_end, op);
+  }
+
   void ColumnMax(IntT num_rows, IntT num_cols, FloatT* d_in, FloatT* d_out) {
     IntT block = 1 + (num_rows * num_cols) / THREAD;
     assert(THREAD * block > num_rows * num_cols);
@@ -298,6 +325,35 @@ namespace host {
     __transpose<<<block, THREAD>>>(d_in_t, d_in, num_rows, num_cols);
     __row_reduce(d_out, d_in_t, num_cols, num_rows, cub::Max(), -DBL_MAX);
     cudaFree(d_in_t);
+  }
+
+  void ColumnSoftmax2(const Int num_rows, const Int num_cols, Real *d_x) {
+    Real* tmp;
+    cudaMalloc(&tmp, num_cols * sizeof(Real));
+    cudaMemset(tmp, 0, num_cols * sizeof(Real));
+    
+    auto row_exp_sum = [=]__device__(Int const& offset) {
+      Int j = offset % num_cols;
+      atomicAdd(tmp + j, exp(d_x[offset]));
+    };
+    
+    auto log_op = [=] __device__(Real const& val) -> double {
+      return log(val);
+    };
+
+    auto sub_row = [=] __device__(Int const& offset) {
+      Int j = offset % num_cols;
+      d_x[offset] -= tmp[j];
+    };
+    
+    auto it_start = thrust::make_counting_iterator<Int>(0);
+    auto it_end   = thrust::make_counting_iterator<Int>(num_rows * num_cols);
+    
+    thrust::for_each(thrust::device, it_start, it_end, row_exp_sum);
+    thrust::transform(thrust::device, tmp, tmp + num_cols, tmp, log_op);
+    thrust::for_each(thrust::device, it_start, it_end, sub_row);
+    
+    cudaFree(tmp);
   }
 
   void ColumnSoftmax(const IntT num_rows, const IntT num_cols, FloatT *d_x) {
@@ -347,7 +403,36 @@ namespace host {
     cudaFree(d_xt);
     cudaFree(d_storage);
   }
+  
+  void EdgeMaxReduce2(
+    IntT num_rows_in,  // n_edges
+    IntT num_rows_out, // n_nodes
+    IntT num_cols,
+    FloatT* VYMax,
+    FloatT* XE,
+    FloatT* XMax,
+    Int* ndoes
+  ) {
+    auto fill = [=] __device__(Int const& offset) {
+      XMax[offset] = VYMax[offset % num_cols];
+    };
+    
+    auto op = [=] __device__(Int const& offset) {
+      Int edge_idx = offset / num_cols;
+      Int col      = offset % num_cols;
+      Int src      = ndoes[edge_idx];
+      atomicMax(XMax + (src * num_cols) + col, XE[offset]);
+    };
 
+    auto it_start1 = thrust::make_counting_iterator<Int>(0);
+    auto it_end1   = thrust::make_counting_iterator<Int>(num_rows_out * num_cols);    
+    thrust::for_each(thrust::device, it_start1, it_end1, fill);
+    
+    auto it_start2 = thrust::make_counting_iterator<Int>(0);
+    auto it_end2   = thrust::make_counting_iterator<Int>(num_rows_in * num_cols);
+    thrust::for_each(thrust::device, it_start2, it_end2, op);
+  }
+  
   void EdgeMaxReduce(IntT num_rows_in, IntT num_rows_out, IntT num_cols,
     FloatT* d_VYmax, FloatT* d_XE, FloatT* d_XMax, IntT* nodes, IntT* map=NULL) {
 
@@ -424,6 +509,44 @@ namespace host {
     cudaFree(d_keys_out);
     cudaFree(d_values_out);
     cudaFree(d_num_runs_out);
+  }
+
+  void ComputeMU2(
+    Int row_in,
+    Int col_in,
+    Int row_out,
+    Int col_out,
+    Real* CV,
+    Real* FMax,
+    Real* RMax,
+    Int* srcs,
+    Int* dsts,
+    Real* MU
+  ) {
+    
+    auto mu_op = [=] __device__(Int const& offset) {
+      auto row = offset / col_in;
+      auto col = offset % col_in;
+      auto src = srcs[col];
+      auto dst = dsts[col];
+      atomicAdd(MU + (row * col_out + dst), FMax[row * col_in + col]);
+      atomicAdd(MU + (row * col_out + src), RMax[row * col_in + col]);
+    };
+    
+    thrust::transform(
+      thrust::device,
+      CV,
+      CV + (row_out * col_out),
+      MU,
+      [=] __device__(Real const& val) -> Real { return -val; }
+    );
+    
+    thrust::for_each(
+      thrust::device,
+      thrust::make_counting_iterator<Int>(0),
+      thrust::make_counting_iterator<Int>(row_in * col_in),
+      mu_op
+    );
   }
 
 

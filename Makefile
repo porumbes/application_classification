@@ -1,16 +1,14 @@
-# application_classification/Makefile
+include Makefile.inc
 
-ARCH=\
-  -gencode arch=compute_60,code=compute_60 \
-  -gencode arch=compute_60,code=sm_60
+ARCH=-gencode arch=compute_70,code=compute_70 -gencode arch=compute_70,code=sm_70
 
-all : main
+all : main new
 
 main: main.cu ac.cu
-	nvcc $(ARCH) -o main \
-		--compiler-options -Wall \
-		main.cu ac.cu \
-		-I cub/cub
+	$(NVCC) -ccbin=${CXX} ${NVCCFLAGS} --compiler-options "${CXXFLAGS}" -o main main.cu ac.cu -I cub/cub
+
+new: new.cu ac.cu
+	$(NVCC) -ccbin=${CXX} ${NVCCFLAGS} --compiler-options "${CXXFLAGS}" -o new new.cu ac.cu -I cub/cub
 
 clean:
-	rm -f main
+	rm -f main new

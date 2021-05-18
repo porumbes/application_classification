@@ -21,13 +21,13 @@
 # --
 # Test rmat
 
-make clean
-make
+make clean; make -j12
 rm -f cuda_result
-time ./main \
-    data/rmat18.Vertex.csv \
-    data/rmat18.Edges.csv \
+
+time ./main                        \
+    data/rmat18.Vertex.csv         \
+    data/rmat18.Edges.csv          \
     data/georgiyPattern.Vertex.csv \
-    data/georgiyPattern.Edges.csv > cuda_result
+    data/georgiyPattern.Edges.csv  > cuda_result
 
 cat cuda_result | openssl md5

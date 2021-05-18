@@ -7,6 +7,36 @@
 
 #define THREAD 1024
 
+struct cuda_timer_t {
+  float time;
+
+  cuda_timer_t() {
+    cudaEventCreate(&start_);
+    cudaEventCreate(&stop_);
+    cudaEventRecord(start_);
+  }
+
+  ~cuda_timer_t() {
+    cudaEventDestroy(start_);
+    cudaEventDestroy(stop_);
+  }
+
+  void start() { cudaEventRecord(start_); }
+  
+  float stop() {
+    cudaEventRecord(stop_);
+    cudaEventSynchronize(stop_);
+    cudaEventElapsedTime(&time, start_, stop_);
+
+    return microseconds();
+  }
+  
+  float microseconds() { return (long long)(1000 * time); }
+
+ private:
+  cudaEvent_t start_, stop_;
+};
+
 void loadGraph(char * node_filename, char * edge_filename, Graph* d_graph) {
 
   // -------------------------
@@ -131,11 +161,8 @@ int main ( int argc, char * argv[] ) {
   // --
   // Start timer
 
-  cudaEvent_t start, stop;
-  float milliseconds = 0;
-  cudaEventCreate(&start);
-  cudaEventCreate(&stop);
-  cudaEventRecord(start, 0);
+  cuda_timer_t timer;
+  timer.start();
 
   // --
   // Initialize algorithm
@@ -168,11 +195,17 @@ int main ( int argc, char * argv[] ) {
   );
 
   // Normalize distance matrices (could all happen in parallel)
+  cuda_timer_t timer_;
+  timer_.start();
+
   ac::host::ColumnSoftmax(data.num_nodes, patt.num_nodes, CV);
   ac::host::ColumnSoftmax(data.num_nodes, patt.num_nodes, MU);
   ac::host::ColumnSoftmax(data.num_edges, patt.num_edges, CE);
   ac::host::ColumnSoftmax(data.num_edges, patt.num_edges, RE);
   ac::host::ColumnSoftmax(data.num_edges, patt.num_edges, FE);
+
+  long long elapsed_ = timer_.stop();
+  std::cerr << "elapsed_=" << elapsed_ << std::endl;
 
   // Repeat columns of MU by pattern edgelist
   ac::device::RepeatColumnsByPatternEdges<<<block_ve, THREAD>>>(
@@ -261,12 +294,8 @@ int main ( int argc, char * argv[] ) {
   // --
   // Stop timer
 
-  cudaEventRecord(stop, 0);
-  cudaEventSynchronize(stop);
-  cudaEventElapsedTime(&milliseconds, start, stop);
-  cudaEventDestroy(start);
-  cudaEventDestroy(stop);
-  std::cerr << "elapsed_ms=" << milliseconds << std::endl;
+  long long elapsed = timer.stop();
+  std::cerr << "elapsed=" << elapsed << std::endl;
 
   // --
   // Copy results to host and print
@@ -274,25 +303,6 @@ int main ( int argc, char * argv[] ) {
   FloatT *h_MU = (FloatT *) malloc(data.num_nodes * patt.num_nodes * sizeof(FloatT));
   cudaMemcpy(h_MU, MU, data.num_nodes * patt.num_nodes * sizeof(FloatT), cudaMemcpyDeviceToHost);
   for (IntT i = 0; i < data.num_nodes * patt.num_nodes; i ++) printf("%e\n", h_MU[i]);
-
-  // --
-  // Free memory
-
-  cudaFree(CV);
-  cudaFree(CE);
-  // cudaFree(Cnull);
-  cudaFree(MU);
-  cudaFree(RE);
-  cudaFree(FE);
-  cudaFree(VR);
-  cudaFree(VF);
-  cudaFree(VRmax);
-  cudaFree(VFmax);
-  cudaFree(RMax);
-  cudaFree(FMax);
-  free(h_MU);
-
-  return 0;
 }
 
 #endif

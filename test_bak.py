@@ -7,10 +7,10 @@ from scipy.spatial.distance import cdist
 # --
 # IO
 
-data_vertex    = pd.read_csv('./data/georgiyData.Vertex.csv', skiprows=1, sep=' ', header=None)
+data_vertex    = pd.read_csv('./data/rmat18.Vertex.csv', skiprows=1, sep=' ', header=None)
 pattern_vertex = pd.read_csv('./data/georgiyPattern.Vertex.csv', skiprows=1, sep=' ', header=None)
 
-data_edges    = pd.read_csv('./data/georgiyData.Edges.csv', skiprows=1, sep=' ', header=None)
+data_edges    = pd.read_csv('./data/rmat18.Edges.csv', skiprows=1, sep=' ', header=None)
 pattern_edges = pd.read_csv('./data/georgiyPattern.Edges.csv', skiprows=1, sep=' ', header=None)
 
 assert (data_vertex[0] == data_vertex.index).all()
@@ -59,13 +59,30 @@ cnull = np.zeros(cnull.shape[0]) # bug in code?
 # <<
 
 
-vf_max = vf.max(axis=0)
+
+vf_max = vf.max(axis=0) # p_nodes
 vr_max = vr.max(axis=0)
-fmax = np.tile(-cnull + vr_max, num_dv).reshape(num_dv, -1)
-rmax = np.tile(-cnull + vf_max, num_dv).reshape(num_dv, -1)
+fmax   = np.tile(-cnull + vr_max, num_dv).reshape(num_dv, -1)
+rmax   = np.tile(-cnull + vf_max, num_dv).reshape(num_dv, -1)
+
+breakpoint()
+
 for edge_idx, (src, dst) in enumerate(data_edges):
-    fmax[dst] = np.maximum(fmax[dst], fe[edge_idx])
     rmax[src] = np.maximum(rmax[src], re[edge_idx])
+    # fmax[dst] = np.maximum(fmax[dst], fe[edge_idx])
+
+
+n_cols = pattern_edges.shape[0]
+
+rmax2 = np.zeros_like(rmax) - np.inf
+for offset in range(data_edges.shape[0] * n_cols):
+    edge_idx = offset // n_cols
+    col      = offset % n_cols
+    src      = data_edges[edge_idx, 0]
+    val      = max(vf_max[col], re[edge_idx, col])
+    rmax2[src, col] = max(rmax2[src, col], val)
+
+    
 
 
 for _ in range(num_pv):

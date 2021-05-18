@@ -9,14 +9,15 @@ from __future__ import print_function, division
 import numpy as np
 import pandas as pd
 from scipy.spatial.distance import cdist
+from tqdm import trange, tqdm
 
 # --
 # IO
 
-data_vertex    = pd.read_csv('./data/georgiyData.Vertex.csv', skiprows=1, sep=' ', header=None)
+data_vertex    = pd.read_csv('./data/rmat18.Vertex.csv', skiprows=1, sep=' ', header=None)
 pattern_vertex = pd.read_csv('./data/georgiyPattern.Vertex.csv', skiprows=1, sep=' ', header=None)
 
-data_edges    = pd.read_csv('./data/georgiyData.Edges.csv', skiprows=1, sep=' ', header=None)
+data_edges    = pd.read_csv('./data/rmat18.Edges.csv', skiprows=1, sep=' ', header=None)
 pattern_edges = pd.read_csv('./data/georgiyPattern.Edges.csv', skiprows=1, sep=' ', header=None)
 
 assert (data_vertex[0] == data_vertex.index).all()
@@ -36,7 +37,7 @@ num_pv   = pattern_vertex.shape[0]
 num_de   = data_edges.shape[0]
 num_pe   = pattern_edges.shape[0]
 
-edge_dim = pattern_edges.shape[1]
+# edge_dim = pattern_edges.shape[1]
 
 print({
     "num_dv" : num_dv,
@@ -45,6 +46,8 @@ print({
     "num_de" : num_de,
     "num_pe" : num_pe,
 })
+
+sel = np.argsort(data_edges[:,0],  kind='mergesort')
 
 # --
 # Init
@@ -67,7 +70,7 @@ cv = normprob(cv)  # num_dv x num_pv
 
 v_fwd_max = np.zeros(num_pe) # num_dv x num_pe
 v_bak_max = np.zeros(num_pe) # num_dv x num_pe
-mu_max = mu.max(axis=0)
+mu_max    = mu.max(axis=0)
 
 for i, (src, dst) in enumerate(pattern_edges):
     v_bak_max[i] = mu_max[src]
@@ -79,6 +82,9 @@ for i, (src, dst) in enumerate(pattern_edges):
 ce = cdist(data_edges_table, pattern_edges_table) # num_de x num_pe
 xe = normprob(-ce) # num_de x num_pe
 ce = normprob(ce)  # num_de x num_pe
+
+# >>
+
 
 # --
 # Combine
@@ -96,7 +102,7 @@ bak_max = np.zeros((num_dv, num_pe))
 
 fwd_touched = set([])
 bak_touched = set([])
-for edge_idx, (src, dst) in enumerate(data_edges):
+for edge_idx, (src, dst) in tqdm(enumerate(data_edges)):
     if dst not in fwd_touched:
         fwd_max[dst] = np.maximum(v_bak_max, xe[edge_idx])
         fwd_touched.add(dst)
@@ -110,9 +116,10 @@ for edge_idx, (src, dst) in enumerate(data_edges):
         bak_max[src] = np.maximum(bak_max[src], xe[edge_idx])
 
 
+
 v_fwd = np.zeros((num_dv, num_pe)) # num_dv x num_pe
 v_bak = np.zeros((num_dv, num_pe)) # num_dv x num_pe
-for _ in range(num_pv):
+for _ in trange(num_pv):
     
     for p_edge_idx, (src, dst) in enumerate(pattern_edges):
         v_fwd[:,p_edge_idx] = mu[:,dst] - fwd_max[:,p_edge_idx]
@@ -129,7 +136,6 @@ for _ in range(num_pv):
     fwd_max = np.zeros((num_dv, num_pe)) - np.inf # num_dv x num_pe
     bak_max = np.zeros((num_dv, num_pe)) - np.inf # num_dv x num_pe
     
-    sel = np.argsort(data_edges[:,0],  kind='mergesort')
     for d_edge_idx, (src, dst) in enumerate(data_edges[sel]):
         bak_max[src] = np.maximum(bak_max[src], e_bak[d_edge_idx])
     
