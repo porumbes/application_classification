@@ -1,54 +1,59 @@
-#pragma once
-
 #include <iostream>
 #include "thrust/device_vector.h"
 #include <thrust/iterator/discard_iterator.h>
 
-typedef uint64_t Int;
-typedef double Real;
-
-typedef struct Graph {
-  Int    num_nodes;
-  Int    node_feat_dim;
-  Real* node_feats;
-
-  Int    num_edges;
-  Int    edge_feat_dim;
-  Real* edge_feats;
-
-  Int* srcs;
-  Int* dsts;
-
-  Int* srcs_r;
-  Int* dsts_r;
-} Graph;
-
-struct floor_functor {
-   Int c;
-   floor_functor(Int _c) : c(_c) {};
-   __host__ __device__ Int operator() (const Int i) {
-      return i / c;
-      // return 0;
-   }
-};
-
-__device__ static double atomicMax(double* address, double value) {
-  unsigned long long* addr_as_longlong =
-      reinterpret_cast<unsigned long long*>(address);
-  unsigned long long old = *addr_as_longlong;
-  unsigned long long expected;
-  do {
-    expected = old;
-    old = ::atomicCAS(
-        addr_as_longlong, expected,
-        __double_as_longlong(::fmax(value, __longlong_as_double(expected))));
-  } while (expected != old);
-  return __longlong_as_double(old);
-}
+#include "helpers.hxx"
 
 namespace ac {
 
-namespace host {
+  struct floor_functor {
+    Int c;
+    floor_functor(Int _c) : c(_c) {};
+    __host__ __device__ Int operator() (const Int i) {
+        return i / c;
+    }
+  };
+
+  template <typename val>
+  void transpose(val* in, val* out, Int num_rows, Int num_cols) {
+    auto op = [=]__device__(Int const& offset) {
+      Int src_row = offset / num_cols;
+      Int src_col = offset % num_cols;
+      out[src_col * num_rows + src_row] = in[offset];
+    };
+
+    thrust::for_each_n(
+      thrust::device,
+      thrust::make_counting_iterator<Int>(0),
+      num_rows * num_cols,
+      op
+    );
+  }
+  
+  void cdist(Int n_a, Int n_b, Int dim, Real* feats_a, Real* feats_b, Real* out) {
+      
+      auto cdist_op = [=] __device__(Int const& offset) {
+        Int i = offset / n_a;
+        Int j = offset % n_a;
+        
+        Real* vec1 = feats_a + (j * dim);
+        Real* vec2 = feats_b + (i * dim);
+
+        Real dist = 0.0;
+        for (int i = 0; i < dim; i++)
+          dist += (vec1[i] - vec2[i]) * (vec1[i] - vec2[i]);
+        dist = sqrt(dist);
+
+        out[j * n_b + i] = dist;
+      };
+      
+      thrust::for_each_n(
+        thrust::device,
+        thrust::make_counting_iterator<Int>(0),
+        n_a * n_b,
+        cdist_op
+      );
+  }
 
   void RowMax2(Int n_row, Int n_col, Real* d_in, Real* d_out) {
     auto it_start = thrust::make_counting_iterator<Int>(0);
@@ -108,7 +113,7 @@ namespace host {
   }
 
   void EdgeMaxReduce2_t(
-    int_fast8_t n_col_in,
+    Int n_col_in,
     Int n_col_out,
     Int n_row,
     Real* VYMax,
@@ -179,6 +184,4 @@ namespace host {
       mu_op
     );
   }
-  
-}
 }

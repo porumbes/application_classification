@@ -3,59 +3,20 @@
 #include "thrust/device_vector.h"
 
 #include "ac.hxx"
+#include "helpers.hxx"
 
-// !!!! Note that names of row/column in this file might be incorrect,
-//      since I transposed the entire problem
+typedef struct Graph {
+  Int   num_nodes;
+  Int   node_feat_dim;
+  Real* node_feats;
 
-template <typename val>
-void transpose(val* in, val* out, Int num_rows, Int num_cols) {
-  auto op = [=]__device__(Int const& offset) {
-    Int src_row = offset / num_cols;
-    Int src_col = offset % num_cols;
-    out[src_col * num_rows + src_row] = in[offset];
-  };
+  Int   num_edges;
+  Int   edge_feat_dim;
+  Real* edge_feats;
 
-  thrust::for_each_n(
-    thrust::device,
-    thrust::make_counting_iterator<Int>(0),
-    num_rows * num_cols,
-    op
-  );
-}
-
-
-typedef Int Int;
-typedef Real Real;
-
-struct cuda_timer_t {
-  float time;
-
-  cuda_timer_t() {
-    cudaEventCreate(&start_);
-    cudaEventCreate(&stop_);
-    cudaEventRecord(start_);
-  }
-
-  ~cuda_timer_t() {
-    cudaEventDestroy(start_);
-    cudaEventDestroy(stop_);
-  }
-
-  void start() { cudaEventRecord(start_); }
-  
-  float stop() {
-    cudaEventRecord(stop_);
-    cudaEventSynchronize(stop_);
-    cudaEventElapsedTime(&time, start_, stop_);
-
-    return microseconds();
-  }
-  
-  float microseconds() { return (long long)(1000 * time); }
-
- private:
-  cudaEvent_t start_, stop_;
-};
+  Int* srcs;
+  Int* dsts;
+} Graph;
 
 void loadGraph(std::string inpath, Graph* d_graph) {
 
@@ -81,16 +42,6 @@ void loadGraph(std::string inpath, Graph* d_graph) {
   fread(edge_feats, sizeof(Real), num_edges * edge_feat_dim, ptr); 
   fread(srcs,       sizeof(Int),  num_edges,                 ptr); 
   fread(dsts,       sizeof(Int),  num_edges,                 ptr); 
-  
-#ifdef VERBOSE
-        printf("----------------------------\n");
-        std::cout << inpath << std::endl;
-        printf("num_nodes     = %lu \n", num_nodes);
-        printf("node_feat_dim = %lu \n", node_feat_dim);
-        printf("num_edges     = %lu \n", num_edges);
-        printf("edge_feat_dim = %lu \n", edge_feat_dim);
-        printf("----------------------------\n");
-#endif
 
   // -------------------------
   // Build graph
@@ -109,9 +60,6 @@ void loadGraph(std::string inpath, Graph* d_graph) {
   cudaMemcpy(d_graph->edge_feats, edge_feats, num_edges * edge_feat_dim * sizeof(Real), cudaMemcpyHostToDevice);
   cudaMemcpy(d_graph->srcs,       srcs,       num_edges                 * sizeof(Int), cudaMemcpyHostToDevice);
   cudaMemcpy(d_graph->dsts,       dsts,       num_edges                 * sizeof(Int), cudaMemcpyHostToDevice);
- 
-  cudaMalloc((void**)&d_graph->srcs_r, num_edges * sizeof(Int));
-  cudaMalloc((void**)&d_graph->dsts_r, num_edges * sizeof(Int));
 }
 
 
@@ -134,15 +82,17 @@ int main ( int argc, char * argv[] ) {
 
   // Real *Cnull; // Ignoring for now
 
-  cudaMalloc((void **)&MU,    data.num_nodes * patt.num_nodes * sizeof(Real));
+  cudaMalloc((void **)&MU,      data.num_nodes * patt.num_nodes * sizeof(Real));
+  cudaMalloc((void **)&CV_t,    data.num_nodes * patt.num_nodes * sizeof(Real));
+  cudaMalloc((void **)&MU_t,    data.num_nodes * patt.num_nodes * sizeof(Real));
+
   cudaMalloc((void **)&VRmax,                  patt.num_edges * sizeof(Real));
   cudaMalloc((void **)&VFmax,                  patt.num_edges * sizeof(Real));
 
-  cudaMalloc((void **)&CV_t,    data.num_nodes * patt.num_nodes * sizeof(Real));
-  cudaMalloc((void **)&MU_t,    data.num_nodes * patt.num_nodes * sizeof(Real));
   cudaMalloc((void **)&CE_t,    data.num_edges * patt.num_edges * sizeof(Real));
   cudaMalloc((void **)&RE_t,    data.num_edges * patt.num_edges * sizeof(Real));
   cudaMalloc((void **)&FE_t,    data.num_edges * patt.num_edges * sizeof(Real));
+
   cudaMalloc((void **)&VR_t,    data.num_nodes * patt.num_edges * sizeof(Real));
   cudaMalloc((void **)&VF_t,    data.num_nodes * patt.num_edges * sizeof(Real));
   cudaMalloc((void **)&RMax_t,  data.num_nodes * patt.num_edges * sizeof(Real));
@@ -155,60 +105,19 @@ int main ( int argc, char * argv[] ) {
   timer.start();
   
   nvtxRangePushA("prep");
-  auto cdist_node = [=] __device__(Int const& offset) {
-    Int i = offset / patt.num_nodes;
-    Int j = offset % patt.num_nodes;
 
-    Int dim = patt.node_feat_dim;
-
-    Real* vec1 = patt.node_feats + (j * dim);
-    Real* vec2 = data.node_feats + (i * dim);
-
-    Real dist = 0.0;
-    for (int i = 0; i < dim; i++)
-      dist += (vec1[i] - vec2[i]) * (vec1[i] - vec2[i]);
-    dist = sqrt(dist);
-
-    CV_t[j * data.num_nodes + i] = dist;
-    MU_t[j * data.num_nodes + i] = -dist;
-  };
+  ac::cdist(patt.num_nodes, data.num_nodes, patt.node_feat_dim, patt.node_feats, data.node_feats, CV_t);
+  ac::cdist(patt.num_edges, data.num_edges, patt.edge_feat_dim, patt.edge_feats, data.edge_feats, CE_t);
   
-  thrust::for_each_n(
-    thrust::device,
-    thrust::make_counting_iterator<Int>(0),
-    patt.num_nodes * data.num_nodes,
-    cdist_node
-  );
+  thrust::transform(thrust::device, CV_t, CV_t + (patt.num_nodes * data.num_nodes), MU_t, [=] __device__ (Real const& val) {return - val;});
+  thrust::transform(thrust::device, CE_t, CE_t + (patt.num_nodes * data.num_nodes), RE_t, [=] __device__ (Real const& val) {return - val;});
+  thrust::transform(thrust::device, CE_t, CE_t + (patt.num_nodes * data.num_nodes), FE_t, [=] __device__ (Real const& val) {return - val;});
 
-  auto cdist_edge = [=] __device__(Int const& offset) {
-    Int i      = offset / patt.num_edges;
-    Int j      = offset % patt.num_edges;
-    Int dim    = patt.edge_feat_dim;
-    Real* vec1 = patt.edge_feats + j * dim;
-    Real* vec2 = data.edge_feats + i * dim;
-
-    Real dist = 0.0;
-    for (int i = 0; i < dim; i++)
-      dist += (vec1[i] - vec2[i]) * (vec1[i] - vec2[i]);
-    dist = sqrt(dist);
-
-    CE_t[j * data.num_edges + i] = dist;
-    RE_t[j * data.num_edges + i] = - dist;
-    FE_t[j * data.num_edges + i] = - dist;
-  };
-  
-  thrust::for_each_n(
-    thrust::device,
-    thrust::make_counting_iterator<Int>(0),
-    patt.num_edges * data.num_edges,
-    cdist_edge
-  );
-
-  ac::host::RowSoftmax2(patt.num_nodes, data.num_nodes, CV_t);
-  ac::host::RowSoftmax2(patt.num_nodes, data.num_nodes, MU_t);
-  ac::host::RowSoftmax2(patt.num_edges, data.num_edges, CE_t);
-  ac::host::RowSoftmax2(patt.num_edges, data.num_edges, RE_t);
-  ac::host::RowSoftmax2(patt.num_edges, data.num_edges, FE_t);
+  ac::RowSoftmax2(patt.num_nodes, data.num_nodes, CV_t);
+  ac::RowSoftmax2(patt.num_nodes, data.num_nodes, MU_t);
+  ac::RowSoftmax2(patt.num_edges, data.num_edges, CE_t);
+  ac::RowSoftmax2(patt.num_edges, data.num_edges, RE_t);
+  ac::RowSoftmax2(patt.num_edges, data.num_edges, FE_t);
 
   auto init_VX = [=] __device__(Int const& offset) {
       Int i        = offset % data.num_nodes;
@@ -223,15 +132,15 @@ int main ( int argc, char * argv[] ) {
     init_VX
   );
 
-  ac::host::RowMax2(patt.num_edges, data.num_nodes, VF_t, VFmax);
-  ac::host::RowMax2(patt.num_edges, data.num_nodes, VR_t, VRmax);
+  ac::RowMax2(patt.num_edges, data.num_nodes, VF_t, VFmax);
+  ac::RowMax2(patt.num_edges, data.num_nodes, VR_t, VRmax);
 
-  ac::host::EdgeMaxReduce2_t(
+  ac::EdgeMaxReduce2_t(
     data.num_edges, data.num_nodes, patt.num_edges,
     VFmax, RE_t, RMax_t, data.srcs
   );
   
-  ac::host::EdgeMaxReduce2_t(
+  ac::EdgeMaxReduce2_t(
     data.num_edges, data.num_nodes, patt.num_edges,
     VRmax, FE_t, FMax_t, data.dsts
   );
@@ -285,17 +194,17 @@ int main ( int argc, char * argv[] ) {
     
     nvtxRangePushA("step3_a"); // independent of step f
     // simple row-wise -- OK
-    ac::host::RowMax2(patt.num_edges, data.num_nodes, VF_t, VFmax);
+    ac::RowMax2(patt.num_edges, data.num_nodes, VF_t, VFmax);
     nvtxRangePop();
     
     nvtxRangePushA("step3_b");
     // simple row-wise -- OK
-    ac::host::RowSoftmax2_prealloc(patt.num_edges, data.num_edges, RE_t, RE_tmp);
+    ac::RowSoftmax2_prealloc(patt.num_edges, data.num_edges, RE_t, RE_tmp);
     nvtxRangePop();
     
     nvtxRangePushA("step3_c");
     // random column read -- OK
-    ac::host::EdgeMaxReduce2_t(
+    ac::EdgeMaxReduce2_t(
       data.num_edges, data.num_nodes, patt.num_edges,
       VFmax, RE_t, RMax_t,
       data.srcs
@@ -304,11 +213,11 @@ int main ( int argc, char * argv[] ) {
     
     nvtxRangePushA("step4"); // independent of step 3
     // simple row-wise -- OK
-    ac::host::RowMax2(patt.num_edges, data.num_nodes, VR_t, VRmax);
+    ac::RowMax2(patt.num_edges, data.num_nodes, VR_t, VRmax);
     // simple row-wise -- OK
-    ac::host::RowSoftmax2_prealloc(patt.num_edges, data.num_edges, FE_t, FE_tmp);
+    ac::RowSoftmax2_prealloc(patt.num_edges, data.num_edges, FE_t, FE_tmp);
     // random column read -- OK
-    ac::host::EdgeMaxReduce2_t(
+    ac::EdgeMaxReduce2_t(
       data.num_edges, data.num_nodes, patt.num_edges,
       VRmax, FE_t, FMax_t,
       data.dsts
@@ -317,7 +226,7 @@ int main ( int argc, char * argv[] ) {
 
     nvtxRangePushA("step5");
     // random row-write -- BAD
-    ac::host::ComputeMU2_t(
+    ac::ComputeMU2_t(
       data.num_nodes, patt.num_edges,
       data.num_nodes, patt.num_nodes,
       CV_t,
@@ -329,13 +238,13 @@ int main ( int argc, char * argv[] ) {
     );
     
     // simple row-wise -- OK
-    ac::host::RowSoftmax2_prealloc(patt.num_nodes, data.num_nodes, MU_t, MU_tmp);
+    ac::RowSoftmax2_prealloc(patt.num_nodes, data.num_nodes, MU_t, MU_tmp);
     nvtxRangePop();
     
     nvtxRangePop();
   }
 
-  transpose(MU_t, MU, patt.num_nodes, data.num_nodes);
+  ac::transpose(MU_t, MU, patt.num_nodes, data.num_nodes);
   
   long long elapsed = timer.stop();
   std::cerr << "elapsed=" << elapsed << std::endl;
