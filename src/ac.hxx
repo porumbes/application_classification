@@ -44,7 +44,7 @@ namespace ac {
           dist += (vec1[i] - vec2[i]) * (vec1[i] - vec2[i]);
         dist = sqrt(dist);
 
-        out[j * n_b + i] = dist;
+        out[offset] = dist;
       };
       
       thrust::for_each_n(
@@ -113,39 +113,202 @@ namespace ac {
   }
 
   void EdgeMaxReduce2_t(
-    Int n_col_in,
-    Int n_col_out,
-    Int n_row,
-    Real* VYMax,
+    Int data_num_edges,
+    Int data_num_nodes,
+    Int patt_num_edges,
+    Real* VYmax,
     Real* XE_t,
     Real* XMax_t, // output
     Int* nodes
   ) {
     auto fill = [=] __device__(Int const& offset) {
-      XMax_t[offset] = VYMax[offset / n_col_out];
+      XMax_t[offset] = VYmax[offset / data_num_nodes];
     };
     
     auto op = [=] __device__(Int const& offset) {
-      Int r = offset / n_col_in;
-      Int c = offset % n_col_in;
+      Int r = offset / data_num_edges;
+      Int c = offset % data_num_edges;
       
       // random column write
-      atomicMax(XMax_t + (n_col_out * r) + nodes[c], XE_t[offset]);
+      atomicMax(XMax_t + (data_num_nodes * r) + nodes[c], XE_t[offset]);
     };
 
     thrust::for_each_n(
       thrust::device, 
       thrust::make_counting_iterator<Int>(0), 
-      n_col_out * n_row, 
+      data_num_nodes * patt_num_edges, 
       fill
     );
     
     thrust::for_each_n(
       thrust::device, 
       thrust::make_counting_iterator<Int>(0), 
-      n_col_in * n_row, 
+      data_num_edges * patt_num_edges, 
       op
     );
+  }
+
+
+  void updateXMax_t(
+    Int patt_num_nodes,
+    Int patt_num_edges,
+    Int data_num_nodes,
+    Int data_num_edges,
+    Real* g_CE_t,
+    Real* g_VY_t,
+    Real* g_VYmax,
+    Real* g_XE_t,
+    Real* g_XE_tmp,
+    Real* g_XMax_t,
+    Int* srcs,
+    Int* nodes
+  ) {
+    
+    // VY_t   : (patt_num_edges, data_num_nodes) // read from subset of rows
+    // XE_t   : (patt_num_edges, data_num_edges) // subset of rows from VY_t
+    // VYmax  : (patt.num_edges, )               // subset of rows of VY_t
+    // XMax_t : (patt.num_edges, data.num_nodes)
+    
+    // Broadcast CE_t
+    
+    Int n_gpus     = 2;
+    Int* starts    = (Int*)malloc(n_gpus * sizeof(Int));
+    Int* ends      = (Int*)malloc(n_gpus * sizeof(Int));
+    Int chunk_size = (patt_num_edges + n_gpus - 1) / n_gpus;
+    for(Int i = 0; i < n_gpus; i++) {
+        starts[i] = i       * chunk_size;
+        ends[i]   = (i + 1) * chunk_size;
+    }
+    ends[n_gpus - 1] = patt_num_edges;
+    
+    for(Int i = 0; i < n_gpus; i++) {
+      
+      Int start = starts[i];
+      Int end   = ends[i];
+      Int size  = end - start;
+      
+      Real* CE_t;
+      Real* VY_t;
+      Real* VYmax;
+      Real* XE_t;
+      Real* XE_tmp;
+      Real* XMax_t;
+      
+      cudaMalloc(&VYmax,                    size * sizeof(Real)); // local
+      cudaMalloc(&CE_t,    data_num_edges * size * sizeof(Real)); // static
+      cudaMalloc(&XE_t,    data_num_edges * size * sizeof(Real)); // local
+      cudaMalloc(&VY_t,    data_num_nodes * size * sizeof(Real)); // needs copy to
+      cudaMalloc(&XMax_t,  data_num_nodes * size * sizeof(Real)); // needs copy back
+      cudaMalloc(&XE_tmp,                   size * sizeof(Real)); // local
+      
+      cudaMemcpy(VYmax,    g_VYmax + start,                    size * sizeof(Real),  cudaMemcpyDeviceToDevice);
+      cudaMemcpy(CE_t,      g_CE_t + start * data_num_edges,   data_num_edges * size * sizeof(Real),  cudaMemcpyDeviceToDevice);
+      cudaMemcpy(XE_t,      g_XE_t + start * data_num_edges,   data_num_edges * size * sizeof(Real),  cudaMemcpyDeviceToDevice);
+      cudaMemcpy(VY_t,      g_VY_t + start * data_num_nodes,   data_num_nodes * size * sizeof(Real),  cudaMemcpyDeviceToDevice);
+      cudaMemcpy(XMax_t,  g_XMax_t + start * data_num_nodes,   data_num_nodes * size * sizeof(Real),  cudaMemcpyDeviceToDevice);
+      cudaMemcpy(XE_tmp,  g_XE_tmp + start,                    size * sizeof(Real),  cudaMemcpyDeviceToDevice);
+
+      // --
+      
+      auto update_XE = [=] __device__(Int const& offset) {
+        Int r        = offset / data_num_edges;
+        Int c        = offset % data_num_edges;
+        XE_t[offset] = VY_t[data_num_nodes * r + srcs[c]] - CE_t[offset];
+      };
+      thrust::for_each_n(
+        thrust::device,
+        thrust::make_counting_iterator<Int>(0),
+        size * data_num_edges,         // chunk: size
+        update_XE
+      );
+      
+      // --
+      
+      thrust::equal_to<Int> binary_pred;
+      thrust::maximum<Real> binary_op;
+      
+      thrust::reduce_by_key(
+        thrust::device,
+        thrust::make_transform_iterator(
+          thrust::make_counting_iterator<Int>(0), 
+          floor_functor(data_num_nodes)
+        ),
+        thrust::make_transform_iterator(
+          thrust::make_counting_iterator<Int>(size * data_num_nodes), // chunk: size
+          floor_functor(data_num_nodes)
+        ),
+        VY_t,
+        thrust::make_discard_iterator(),
+        VYmax,
+        binary_pred,
+        binary_op
+      );
+      
+      // --
+      
+      auto exp_op  = [=] __device__(Real const& val) -> Real { return exp(val); };
+      auto log_op  = [=] __device__(Real const& val) -> Real { return log(val); };
+      auto sub_row = [=] __device__(Int const& idx)  -> void { XE_t[idx] -= XE_tmp[idx / data_num_edges]; };
+          
+      thrust::transform(thrust::device, XE_t, XE_t + (size * data_num_edges), XE_t, exp_op);
+      thrust::reduce_by_key(
+        thrust::device,
+        thrust::make_transform_iterator(
+          thrust::make_counting_iterator<Int>(0),
+          floor_functor(data_num_edges)
+        ),
+        thrust::make_transform_iterator(
+          thrust::make_counting_iterator<Int>(size * data_num_edges), // chunk: size
+          floor_functor(data_num_edges)
+        ),
+        XE_t,
+        thrust::make_discard_iterator(),
+        XE_tmp
+      );
+      thrust::transform(thrust::device, XE_tmp, XE_tmp + size, XE_tmp, log_op);
+      thrust::transform(thrust::device, XE_t, XE_t + (size * data_num_edges), XE_t, log_op);
+      thrust::for_each(
+        thrust::device,
+        thrust::make_counting_iterator<Int>(0),
+        thrust::make_counting_iterator<Int>(size * data_num_edges), // chunk: size
+        sub_row
+      );
+      
+      // --
+      
+      auto fill_op = [=] __device__(Int const& offset) {
+        XMax_t[offset] = VYmax[offset / data_num_nodes];
+      };
+      
+      auto max_op = [=] __device__(Int const& offset) {
+        Int r = offset / data_num_edges;
+        Int c = offset % data_num_edges;
+        atomicMax(XMax_t + (data_num_nodes * r) + nodes[c], XE_t[offset]);
+      };
+
+      thrust::for_each_n(
+        thrust::device, 
+        thrust::make_counting_iterator<Int>(0), 
+        size * data_num_nodes, // chunk: size (?)
+        fill_op
+      );
+      
+      thrust::for_each_n(
+        thrust::device, 
+        thrust::make_counting_iterator<Int>(0), 
+        size * data_num_edges, // chunk: size (?)
+        max_op
+      );      
+      
+      cudaMemcpy(g_XMax_t + (data_num_nodes * start),  XMax_t,   data_num_nodes * size * sizeof(Real),  cudaMemcpyDeviceToDevice);
+      
+      cudaFree(VYmax);
+      cudaFree(CE_t);
+      cudaFree(XE_t);
+      cudaFree(VY_t);
+      cudaFree(XMax_t);
+      cudaFree(XE_tmp);
+    }
   }
   
   void ComputeMU2_t(
@@ -184,4 +347,5 @@ namespace ac {
       mu_op
     );
   }
+  
 }

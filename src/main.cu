@@ -86,8 +86,8 @@ int main ( int argc, char * argv[] ) {
   cudaMalloc((void **)&CV_t,    data.num_nodes * patt.num_nodes * sizeof(Real));
   cudaMalloc((void **)&MU_t,    data.num_nodes * patt.num_nodes * sizeof(Real));
 
-  cudaMalloc((void **)&VRmax,                  patt.num_edges * sizeof(Real));
-  cudaMalloc((void **)&VFmax,                  patt.num_edges * sizeof(Real));
+  cudaMalloc((void **)&VRmax,                    patt.num_edges * sizeof(Real));
+  cudaMalloc((void **)&VFmax,                    patt.num_edges * sizeof(Real));
 
   cudaMalloc((void **)&CE_t,    data.num_edges * patt.num_edges * sizeof(Real));
   cudaMalloc((void **)&RE_t,    data.num_edges * patt.num_edges * sizeof(Real));
@@ -98,6 +98,13 @@ int main ( int argc, char * argv[] ) {
   cudaMalloc((void **)&RMax_t,  data.num_nodes * patt.num_edges * sizeof(Real));
   cudaMalloc((void **)&FMax_t,  data.num_nodes * patt.num_edges * sizeof(Real));
 
+  Real* MU_tmp;
+  Real* RE_tmp;
+  Real* FE_tmp;
+  cudaMalloc(&MU_tmp, patt.num_nodes * sizeof(Real));
+  cudaMalloc(&RE_tmp, patt.num_edges * sizeof(Real));
+  cudaMalloc(&FE_tmp, patt.num_edges * sizeof(Real));
+  
   // --
   // Initialize algorithm
 
@@ -106,8 +113,8 @@ int main ( int argc, char * argv[] ) {
   
   nvtxRangePushA("prep");
 
-  ac::cdist(patt.num_nodes, data.num_nodes, patt.node_feat_dim, patt.node_feats, data.node_feats, CV_t);
-  ac::cdist(patt.num_edges, data.num_edges, patt.edge_feat_dim, patt.edge_feats, data.edge_feats, CE_t);
+  ac::cdist(data.num_nodes, patt.num_nodes, patt.node_feat_dim, data.node_feats, patt.node_feats, CV_t);
+  ac::cdist(data.num_edges, patt.num_edges, patt.edge_feat_dim, data.edge_feats, patt.edge_feats, CE_t);
   
   thrust::transform(thrust::device, CV_t, CV_t + (patt.num_nodes * data.num_nodes), MU_t, [=] __device__ (Real const& val) {return - val;});
   thrust::transform(thrust::device, CE_t, CE_t + (patt.num_nodes * data.num_nodes), RE_t, [=] __device__ (Real const& val) {return - val;});
@@ -149,18 +156,11 @@ int main ( int argc, char * argv[] ) {
   
   // --
   // Run
-  
-  Real* MU_tmp;
-  Real* RE_tmp;
-  Real* FE_tmp;
-  cudaMalloc(&MU_tmp, patt.num_nodes * sizeof(Real));
-  cudaMalloc(&RE_tmp, patt.num_edges * sizeof(Real));
-  cudaMalloc(&FE_tmp, patt.num_edges * sizeof(Real));
 
   for (Int i = 0; i < patt.num_nodes; i++) {
     nvtxRangePushA("loop");
     
-    nvtxRangePushA("step1");
+    nvtxRangePushA("update_VX");
     // random row access -- BAD
     auto update_VX = [=] __device__(Int const& offset) {
       Int r        = offset / data.num_nodes;
@@ -175,60 +175,39 @@ int main ( int argc, char * argv[] ) {
       update_VX
     );
     nvtxRangePop();
-
-    nvtxRangePushA("step2");
-    // random column read -- OK
-    auto update_XE = [=] __device__(Int const& offset) {
-      Int r        = offset / data.num_edges;
-      Int c        = offset % data.num_edges;
-      FE_t[offset] = VR_t[data.num_nodes * r + data.srcs[c]] - CE_t[offset];
-      RE_t[offset] = VF_t[data.num_nodes * r + data.srcs[c]] - CE_t[offset];
-    };
-    thrust::for_each_n(
-      thrust::device,
-      thrust::make_counting_iterator<Int>(0),
-      data.num_edges * patt.num_edges,
-      update_XE
-    );
-    nvtxRangePop();
     
-    nvtxRangePushA("step3_a"); // independent of step f
-    // simple row-wise -- OK
-    ac::RowMax2(patt.num_edges, data.num_nodes, VF_t, VFmax);
-    nvtxRangePop();
-    
-    nvtxRangePushA("step3_b");
-    // simple row-wise -- OK
-    ac::RowSoftmax2_prealloc(patt.num_edges, data.num_edges, RE_t, RE_tmp);
-    nvtxRangePop();
-    
-    nvtxRangePushA("step3_c");
-    // random column read -- OK
-    ac::EdgeMaxReduce2_t(
-      data.num_edges, data.num_nodes, patt.num_edges,
-      VFmax, RE_t, RMax_t,
+    nvtxRangePushA("updateXMax_t:1");
+    ac::updateXMax_t(
+      patt.num_nodes, patt.num_edges, data.num_nodes, data.num_edges,
+      CE_t,
+      VF_t,
+      VFmax,
+      RE_t,
+      RE_tmp,
+      RMax_t,
+      data.srcs,
       data.srcs
     );
     nvtxRangePop();
     
-    nvtxRangePushA("step4"); // independent of step 3
-    // simple row-wise -- OK
-    ac::RowMax2(patt.num_edges, data.num_nodes, VR_t, VRmax);
-    // simple row-wise -- OK
-    ac::RowSoftmax2_prealloc(patt.num_edges, data.num_edges, FE_t, FE_tmp);
-    // random column read -- OK
-    ac::EdgeMaxReduce2_t(
-      data.num_edges, data.num_nodes, patt.num_edges,
-      VRmax, FE_t, FMax_t,
+    nvtxRangePushA("updateXMax_t:2");
+    ac::updateXMax_t(
+      patt.num_nodes, patt.num_edges, data.num_nodes, data.num_edges,
+      CE_t,
+      VR_t,
+      VRmax,
+      FE_t,
+      FE_tmp,
+      FMax_t,
+      data.srcs,
       data.dsts
     );
     nvtxRangePop();
 
-    nvtxRangePushA("step5");
+    nvtxRangePushA("ComputeMU2_t");
     // random row-write -- BAD
     ac::ComputeMU2_t(
-      data.num_nodes, patt.num_edges,
-      data.num_nodes, patt.num_nodes,
+      data.num_nodes, patt.num_edges, data.num_nodes, patt.num_nodes,
       CV_t,
       FMax_t,
       RMax_t,
