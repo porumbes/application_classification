@@ -1,8 +1,27 @@
-#include <iostream>
-#include "main.h"
+#pragma once
 
+#include <iostream>
 #include "thrust/device_vector.h"
 #include <thrust/iterator/discard_iterator.h>
+
+typedef uint64_t Int;
+typedef double Real;
+
+typedef struct Graph {
+  Int    num_nodes;
+  Int    node_feat_dim;
+  Real* node_feats;
+
+  Int    num_edges;
+  Int    edge_feat_dim;
+  Real* edge_feats;
+
+  Int* srcs;
+  Int* dsts;
+
+  Int* srcs_r;
+  Int* dsts_r;
+} Graph;
 
 struct floor_functor {
    Int c;
@@ -49,13 +68,6 @@ namespace host {
       binary_op
     );
   }
-  
-  void RowSoftmax2(const Int n_row, const Int n_col, Real* d_x) {
-    Real* tmp;
-    cudaMalloc(&tmp, n_row * sizeof(Real));
-    RowSoftmax2_prealloc(n_row, n_col, d_x, tmp);
-    cudaFree(tmp);
-  }
 
   void RowSoftmax2_prealloc(const Int n_row, const Int n_col, Real *d_x, Real* tmp) {
     auto exp_op = [=] __device__(Real const& val) -> Real {
@@ -87,14 +99,21 @@ namespace host {
     thrust::transform(thrust::device, d_x, d_x + (n_row * n_col), d_x, log_op);
     thrust::for_each(thrust::device, it_start, it_end, sub_row);
   }
+  
+  void RowSoftmax2(const Int n_row, const Int n_col, Real* d_x) {
+    Real* tmp;
+    cudaMalloc(&tmp, n_row * sizeof(Real));
+    RowSoftmax2_prealloc(n_row, n_col, d_x, tmp);
+    cudaFree(tmp);
+  }
 
   void EdgeMaxReduce2_t(
-    IntT n_col_in,
-    IntT n_col_out,
-    IntT n_row,
-    FloatT* VYMax,
-    FloatT* XE_t,
-    FloatT* XMax_t, // output
+    int_fast8_t n_col_in,
+    Int n_col_out,
+    Int n_row,
+    Real* VYMax,
+    Real* XE_t,
+    Real* XMax_t, // output
     Int* nodes
   ) {
     auto fill = [=] __device__(Int const& offset) {
@@ -140,7 +159,7 @@ namespace host {
     auto mu_op = [=] __device__(Int const& offset) {
       auto r   = offset / n_col_in;
       auto c   = offset % n_col_in;
-      // random row write
+      // random row write -- bad
       atomicAdd(MU_t + (n_col_out * dsts[r] + c), FMax_t[offset]);
       atomicAdd(MU_t + (n_col_out * srcs[r] + c), RMax_t[offset]);
     };
@@ -160,7 +179,6 @@ namespace host {
       mu_op
     );
   }
-
+  
 }
-
 }

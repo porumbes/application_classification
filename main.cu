@@ -1,15 +1,11 @@
-#ifndef __MAIN_CU
-#define __MAIN_CU
-
 #include <iostream>
-#include "main.h"
 #include "nvToolsExt.h"
-
 #include "thrust/device_vector.h"
+
+#include "ac.hxx"
 
 // !!!! Note that names of row/column in this file might be incorrect,
 //      since I transposed the entire problem
-
 
 template <typename val>
 void transpose(val* in, val* out, Int num_rows, Int num_cols) {
@@ -258,8 +254,8 @@ int main ( int argc, char * argv[] ) {
     nvtxRangePushA("step1");
     // random row access -- BAD
     auto update_VX = [=] __device__(Int const& offset) {
-      Int r = offset / data.num_nodes;
-      Int c = offset % data.num_nodes;
+      Int r        = offset / data.num_nodes;
+      Int c        = offset % data.num_nodes;
       VF_t[offset] = MU_t[data.num_nodes * patt.dsts[r] + c] - FMax_t[offset];
       VR_t[offset] = MU_t[data.num_nodes * patt.srcs[r] + c] - RMax_t[offset];
     };
@@ -274,8 +270,8 @@ int main ( int argc, char * argv[] ) {
     nvtxRangePushA("step2");
     // random column read -- OK
     auto update_XE = [=] __device__(Int const& offset) {
-      Int r = offset / data.num_edges;
-      Int c = offset % data.num_edges;
+      Int r        = offset / data.num_edges;
+      Int c        = offset % data.num_edges;
       FE_t[offset] = VR_t[data.num_nodes * r + data.srcs[c]] - CE_t[offset];
       RE_t[offset] = VF_t[data.num_nodes * r + data.srcs[c]] - CE_t[offset];
     };
@@ -351,5 +347,3 @@ int main ( int argc, char * argv[] ) {
   cudaMemcpy(h_MU, MU, data.num_nodes * patt.num_nodes * sizeof(Real), cudaMemcpyDeviceToHost);
   for (Int i = 0; i < data.num_nodes * patt.num_nodes; i ++) printf("%e\n", h_MU[i]);
 }
-
-#endif

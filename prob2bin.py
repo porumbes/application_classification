@@ -43,7 +43,7 @@ print(data_edges_table.shape)
 print(pattern_vertex.shape)
 print(pattern_edges_table.shape)
 
-with open('data.bin', 'wb') as f:
+with open('data/data.bin', 'wb') as f:
   for xx in [
     np.hstack([data_vertex.shape, data_edges_table.shape]).astype(np.uint64),
     data_vertex.ravel().astype(np.float64),
@@ -53,7 +53,7 @@ with open('data.bin', 'wb') as f:
   ]:
     f.write(bytearray(xx))
 
-with open('pattern.bin', 'wb') as f:
+with open('data/pattern.bin', 'wb') as f:
   for xx in [
     np.hstack([pattern_vertex.shape, pattern_edges_table.shape]).astype(np.uint64),
     pattern_vertex.ravel().astype(np.float64),
