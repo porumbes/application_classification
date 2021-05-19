@@ -1,35 +1,59 @@
 #include <iostream>
-#include "main.h"
-
 #include "thrust/device_vector.h"
 #include <thrust/iterator/discard_iterator.h>
 
-struct floor_functor {
-   Int c;
-   floor_functor(Int _c) : c(_c) {};
-   __host__ __device__ Int operator() (const Int i) {
-      return i / c;
-      // return 0;
-   }
-};
-
-__device__ static double atomicMax(double* address, double value) {
-  unsigned long long* addr_as_longlong =
-      reinterpret_cast<unsigned long long*>(address);
-  unsigned long long old = *addr_as_longlong;
-  unsigned long long expected;
-  do {
-    expected = old;
-    old = ::atomicCAS(
-        addr_as_longlong, expected,
-        __double_as_longlong(::fmax(value, __longlong_as_double(expected))));
-  } while (expected != old);
-  return __longlong_as_double(old);
-}
+#include "helpers.hxx"
 
 namespace ac {
 
-namespace host {
+  struct floor_functor {
+    Int c;
+    floor_functor(Int _c) : c(_c) {};
+    __host__ __device__ Int operator() (const Int i) {
+        return i / c;
+    }
+  };
+
+  template <typename val>
+  void transpose(val* in, val* out, Int num_rows, Int num_cols) {
+    auto op = [=]__device__(Int const& offset) {
+      Int src_row = offset / num_cols;
+      Int src_col = offset % num_cols;
+      out[src_col * num_rows + src_row] = in[offset];
+    };
+
+    thrust::for_each_n(
+      thrust::device,
+      thrust::make_counting_iterator<Int>(0),
+      num_rows * num_cols,
+      op
+    );
+  }
+  
+  void cdist(Int n_a, Int n_b, Int dim, Real* feats_a, Real* feats_b, Real* out) {
+      
+      auto cdist_op = [=] __device__(Int const& offset) {
+        Int i = offset / n_a;
+        Int j = offset % n_a;
+        
+        Real* vec1 = feats_a + (j * dim);
+        Real* vec2 = feats_b + (i * dim);
+
+        Real dist = 0.0;
+        for (int i = 0; i < dim; i++)
+          dist += (vec1[i] - vec2[i]) * (vec1[i] - vec2[i]);
+        dist = sqrt(dist);
+
+        out[j * n_b + i] = dist;
+      };
+      
+      thrust::for_each_n(
+        thrust::device,
+        thrust::make_counting_iterator<Int>(0),
+        n_a * n_b,
+        cdist_op
+      );
+  }
 
   void RowMax2(Int n_row, Int n_col, Real* d_in, Real* d_out) {
     auto it_start = thrust::make_counting_iterator<Int>(0);
@@ -48,13 +72,6 @@ namespace host {
       binary_pred,
       binary_op
     );
-  }
-  
-  void RowSoftmax2(const Int n_row, const Int n_col, Real* d_x) {
-    Real* tmp;
-    cudaMalloc(&tmp, n_row * sizeof(Real));
-    RowSoftmax2_prealloc(n_row, n_col, d_x, tmp);
-    cudaFree(tmp);
   }
 
   void RowSoftmax2_prealloc(const Int n_row, const Int n_col, Real *d_x, Real* tmp) {
@@ -87,14 +104,21 @@ namespace host {
     thrust::transform(thrust::device, d_x, d_x + (n_row * n_col), d_x, log_op);
     thrust::for_each(thrust::device, it_start, it_end, sub_row);
   }
+  
+  void RowSoftmax2(const Int n_row, const Int n_col, Real* d_x) {
+    Real* tmp;
+    cudaMalloc(&tmp, n_row * sizeof(Real));
+    RowSoftmax2_prealloc(n_row, n_col, d_x, tmp);
+    cudaFree(tmp);
+  }
 
   void EdgeMaxReduce2_t(
-    IntT n_col_in,
-    IntT n_col_out,
-    IntT n_row,
-    FloatT* VYMax,
-    FloatT* XE_t,
-    FloatT* XMax_t, // output
+    Int n_col_in,
+    Int n_col_out,
+    Int n_row,
+    Real* VYMax,
+    Real* XE_t,
+    Real* XMax_t, // output
     Int* nodes
   ) {
     auto fill = [=] __device__(Int const& offset) {
@@ -160,7 +184,5 @@ namespace host {
       mu_op
     );
   }
-
-}
 
 }
