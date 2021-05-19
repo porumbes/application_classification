@@ -37,26 +37,22 @@ namespace ac {
 
     void RowMax2(IntT, IntT, FloatT*, FloatT*);
 
-    void RowSoftmax2(Int, Int, Real*);
-    void RowSoftmax2_prealloc(Int, Int, Real*, Real*);
-    
-    void EdgeMaxReduce2_t(Int, Int, Int, Real*, Real*, Real*, Int*);
-    
-    void ComputeMU2_t(
-      Int row_in,
-      Int col_in,
-      Int row_out,
-      Int col_out,
-      Real* CV,
-      Real* FMax,
-      Real* RMax,
-      Int* srcs,
-      Int* dsts,
-      Real* MU
+    void RowSoftmax2(
+      Int, Int, Real*
     );
     
+    void RowSoftmax2_prealloc(
+      Int, Int, Real*, Real*
+    );
+    
+    void EdgeMaxReduce2_t(
+      Int, Int, Int, Real*, Real*, Real*, Int*
+    );
+    
+    void ComputeMU2_t(
+      Int, Int, Int, Int, Real*, Real*, Real*, Int*, Int*, Real*
+    ); 
   }
-
 }
 
 #endif

@@ -7,22 +7,22 @@
 
 #include "thrust/device_vector.h"
 
-#define THREAD 1024
-// #define VERBOSE
+// !!!! Note that names of row/column in this file might be incorrect,
+//      since I transposed the entire problem
+
 
 template <typename val>
 void transpose(val* in, val* out, Int num_rows, Int num_cols) {
-
   auto op = [=]__device__(Int const& offset) {
     Int src_row = offset / num_cols;
     Int src_col = offset % num_cols;
     out[src_col * num_rows + src_row] = in[offset];
   };
 
-  thrust::for_each(
+  thrust::for_each_n(
     thrust::device,
     thrust::make_counting_iterator<Int>(0),
-    thrust::make_counting_iterator<Int>(num_rows * num_cols),
+    num_rows * num_cols,
     op
   );
 }
@@ -177,10 +177,10 @@ int main ( int argc, char * argv[] ) {
     MU_t[j * data.num_nodes + i] = -dist;
   };
   
-  thrust::for_each(
+  thrust::for_each_n(
     thrust::device,
     thrust::make_counting_iterator<Int>(0),
-    thrust::make_counting_iterator<Int>(patt.num_nodes * data.num_nodes),
+    patt.num_nodes * data.num_nodes,
     cdist_node
   );
 
@@ -201,10 +201,10 @@ int main ( int argc, char * argv[] ) {
     FE_t[j * data.num_edges + i] = - dist;
   };
   
-  thrust::for_each(
+  thrust::for_each_n(
     thrust::device,
     thrust::make_counting_iterator<Int>(0),
-    thrust::make_counting_iterator<Int>(patt.num_edges * data.num_edges),
+    patt.num_edges * data.num_edges,
     cdist_edge
   );
 
@@ -214,17 +214,17 @@ int main ( int argc, char * argv[] ) {
   ac::host::RowSoftmax2(patt.num_edges, data.num_edges, RE_t);
   ac::host::RowSoftmax2(patt.num_edges, data.num_edges, FE_t);
 
-  auto RepeatColumnsByPatternEdges_op = [=] __device__(Int const& offset) {
-      Int i                        = offset / patt.num_edges;
-      Int j                        = offset % patt.num_edges;
-      VR_t[i + data.num_nodes * j] = MU_t[i + data.num_nodes * patt.srcs[j]];
-      VF_t[i + data.num_nodes * j] = MU_t[i + data.num_nodes * patt.dsts[j]];
+  auto init_VX = [=] __device__(Int const& offset) {
+      Int i        = offset % data.num_nodes;
+      Int j        = offset / data.num_nodes;
+      VR_t[offset] = MU_t[data.num_nodes * patt.srcs[j] + i];
+      VF_t[offset] = MU_t[data.num_nodes * patt.dsts[j] + i];
   };
-  thrust::for_each(
+  thrust::for_each_n(
     thrust::device,
     thrust::make_counting_iterator<Int>(0),
-    thrust::make_counting_iterator<Int>(data.num_nodes * patt.num_edges),
-    RepeatColumnsByPatternEdges_op
+    data.num_nodes * patt.num_edges,
+    init_VX
   );
 
   ac::host::RowMax2(patt.num_edges, data.num_nodes, VF_t, VFmax);
@@ -232,18 +232,12 @@ int main ( int argc, char * argv[] ) {
 
   ac::host::EdgeMaxReduce2_t(
     data.num_edges, data.num_nodes, patt.num_edges,
-    VFmax,
-    RE_t,
-    RMax_t,
-    data.srcs
+    VFmax, RE_t, RMax_t, data.srcs
   );
   
   ac::host::EdgeMaxReduce2_t(
     data.num_edges, data.num_nodes, patt.num_edges,
-    VRmax,
-    FE_t,
-    FMax_t,
-    data.dsts
+    VRmax, FE_t, FMax_t, data.dsts
   );
   
   nvtxRangePop();
@@ -262,54 +256,62 @@ int main ( int argc, char * argv[] ) {
     nvtxRangePushA("loop");
     
     nvtxRangePushA("step1");
-    auto RepeatColumnsByPatternEdgesSubtract_op = [=] __device__(Int const& offset) {
-      Int i = offset % data.num_nodes;
-      Int j = offset / data.num_nodes;
-      VF_t[offset] = MU_t[i + data.num_nodes * patt.dsts[j]] - FMax_t[offset];
-      VR_t[offset] = MU_t[i + data.num_nodes * patt.srcs[j]] - RMax_t[offset];
+    // random row access -- BAD
+    auto update_VX = [=] __device__(Int const& offset) {
+      Int r = offset / data.num_nodes;
+      Int c = offset % data.num_nodes;
+      VF_t[offset] = MU_t[data.num_nodes * patt.dsts[r] + c] - FMax_t[offset];
+      VR_t[offset] = MU_t[data.num_nodes * patt.srcs[r] + c] - RMax_t[offset];
     };
-    thrust::for_each(
+    thrust::for_each_n(
       thrust::device,
       thrust::make_counting_iterator<Int>(0),
-      thrust::make_counting_iterator<Int>(data.num_nodes * patt.num_edges),
-      RepeatColumnsByPatternEdgesSubtract_op
+      data.num_nodes * patt.num_edges,
+      update_VX
     );
     nvtxRangePop();
 
     nvtxRangePushA("step2");
-    auto RepeatColumnsByDataEdges_op = [=] __device__(Int const& offset) {
-      Int i = offset % data.num_edges;
-      Int j = offset / data.num_edges;
-      FE_t[offset] = VR_t[data.srcs[i] + data.num_nodes * j] - CE_t[offset];
-      RE_t[offset] = VF_t[data.srcs[i] + data.num_nodes * j] - CE_t[offset];
+    // random column read -- OK
+    auto update_XE = [=] __device__(Int const& offset) {
+      Int r = offset / data.num_edges;
+      Int c = offset % data.num_edges;
+      FE_t[offset] = VR_t[data.num_nodes * r + data.srcs[c]] - CE_t[offset];
+      RE_t[offset] = VF_t[data.num_nodes * r + data.srcs[c]] - CE_t[offset];
     };
-    thrust::for_each(
+    thrust::for_each_n(
       thrust::device,
       thrust::make_counting_iterator<Int>(0),
-      thrust::make_counting_iterator<Int>(data.num_edges * patt.num_edges),
-      RepeatColumnsByDataEdges_op
+      data.num_edges * patt.num_edges,
+      update_XE
     );
     nvtxRangePop();
     
-    nvtxRangePushA("step3");
-    nvtxRangePushA("step3_a");
-    ac::host::RowMax2(patt.num_edges, data.num_nodes, VF_t, VFmax);               // x.max(axis=0)
+    nvtxRangePushA("step3_a"); // independent of step f
+    // simple row-wise -- OK
+    ac::host::RowMax2(patt.num_edges, data.num_nodes, VF_t, VFmax);
     nvtxRangePop();
+    
     nvtxRangePushA("step3_b");
-    ac::host::RowSoftmax2_prealloc(patt.num_edges, data.num_edges, RE_t, RE_tmp); // x.softmax(axis=0)
+    // simple row-wise -- OK
+    ac::host::RowSoftmax2_prealloc(patt.num_edges, data.num_edges, RE_t, RE_tmp);
     nvtxRangePop();
+    
     nvtxRangePushA("step3_c");
+    // random column read -- OK
     ac::host::EdgeMaxReduce2_t(
       data.num_edges, data.num_nodes, patt.num_edges,
       VFmax, RE_t, RMax_t,
       data.srcs
     );
     nvtxRangePop();
-    nvtxRangePop();
     
-    nvtxRangePushA("step4");
-    ac::host::RowMax2(patt.num_edges, data.num_nodes, VR_t, VRmax);               // x.max(axis=0)
-    ac::host::RowSoftmax2_prealloc(patt.num_edges, data.num_edges, FE_t, FE_tmp); // x.softmax(axis=0)
+    nvtxRangePushA("step4"); // independent of step 3
+    // simple row-wise -- OK
+    ac::host::RowMax2(patt.num_edges, data.num_nodes, VR_t, VRmax);
+    // simple row-wise -- OK
+    ac::host::RowSoftmax2_prealloc(patt.num_edges, data.num_edges, FE_t, FE_tmp);
+    // random column read -- OK
     ac::host::EdgeMaxReduce2_t(
       data.num_edges, data.num_nodes, patt.num_edges,
       VRmax, FE_t, FMax_t,
@@ -318,6 +320,7 @@ int main ( int argc, char * argv[] ) {
     nvtxRangePop();
 
     nvtxRangePushA("step5");
+    // random row-write -- BAD
     ac::host::ComputeMU2_t(
       data.num_nodes, patt.num_edges,
       data.num_nodes, patt.num_nodes,
@@ -329,6 +332,7 @@ int main ( int argc, char * argv[] ) {
       MU_t
     );
     
+    // simple row-wise -- OK
     ac::host::RowSoftmax2_prealloc(patt.num_nodes, data.num_nodes, MU_t, MU_tmp);
     nvtxRangePop();
     
