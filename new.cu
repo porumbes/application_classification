@@ -133,25 +133,14 @@ int main ( int argc, char * argv[] ) {
   // --
   // Allocate memory
 
-  Real *CV, *CE, *MU, *RE, *FE, *VR, *VF, *VRmax, *VFmax, *RMax, *FMax;
-  Real *CV_t, *CE_t, *MU_t, *RE_t, *FE_t, *VR_t, *VF_t, *VRmax_t, *VFmax_t, *RMax_t, *FMax_t;
+  Real *MU, *VRmax, *VFmax;
+  Real *CV_t, *CE_t, *MU_t, *RE_t, *FE_t, *VR_t, *VF_t, *RMax_t, *FMax_t;
 
   // Real *Cnull; // Ignoring for now
 
-  cudaMalloc((void **)&CV,    data.num_nodes * patt.num_nodes * sizeof(Real));
   cudaMalloc((void **)&MU,    data.num_nodes * patt.num_nodes * sizeof(Real));
-
-  cudaMalloc((void **)&CE,    data.num_edges * patt.num_edges * sizeof(Real));
-  cudaMalloc((void **)&RE,    data.num_edges * patt.num_edges * sizeof(Real));
-  cudaMalloc((void **)&FE,    data.num_edges * patt.num_edges * sizeof(Real));
-
-  cudaMalloc((void **)&VR,    data.num_nodes * patt.num_edges * sizeof(Real));
-  cudaMalloc((void **)&VF,    data.num_nodes * patt.num_edges * sizeof(Real));
   cudaMalloc((void **)&VRmax,                  patt.num_edges * sizeof(Real));
   cudaMalloc((void **)&VFmax,                  patt.num_edges * sizeof(Real));
-  cudaMalloc((void **)&RMax,  data.num_nodes * patt.num_edges * sizeof(Real));
-  cudaMalloc((void **)&FMax,  data.num_nodes * patt.num_edges * sizeof(Real));
-  // cudaMalloc((void **)&Cnull,                  patt.num_edges * sizeof(Real));
 
   cudaMalloc((void **)&CV_t,    data.num_nodes * patt.num_nodes * sizeof(Real));
   cudaMalloc((void **)&MU_t,    data.num_nodes * patt.num_nodes * sizeof(Real));
@@ -168,9 +157,6 @@ int main ( int argc, char * argv[] ) {
 
   cuda_timer_t timer;
   timer.start();
-
-  cuda_timer_t timer2;
-  timer2.start();
   
   nvtxRangePushA("prep");
   auto cdist_node = [=] __device__(Int const& offset) {
@@ -187,9 +173,6 @@ int main ( int argc, char * argv[] ) {
       dist += (vec1[i] - vec2[i]) * (vec1[i] - vec2[i]);
     dist = sqrt(dist);
 
-    // CV[i * patt.num_nodes + j] = dist;
-    // MU[i * patt.num_nodes + j] = -dist;
-
     CV_t[j * data.num_nodes + i] = dist;
     MU_t[j * data.num_nodes + i] = -dist;
   };
@@ -202,8 +185,8 @@ int main ( int argc, char * argv[] ) {
   );
 
   auto cdist_edge = [=] __device__(Int const& offset) {
-    Int i     = offset / patt.num_edges;
-    Int j     = offset % patt.num_edges;
+    Int i      = offset / patt.num_edges;
+    Int j      = offset % patt.num_edges;
     Int dim    = patt.edge_feat_dim;
     Real* vec1 = patt.edge_feats + j * dim;
     Real* vec2 = data.edge_feats + i * dim;
@@ -212,10 +195,6 @@ int main ( int argc, char * argv[] ) {
     for (int i = 0; i < dim; i++)
       dist += (vec1[i] - vec2[i]) * (vec1[i] - vec2[i]);
     dist = sqrt(dist);
-
-    // CE[i * patt.num_edges + j] = dist;
-    // RE[i * patt.num_edges + j] = - dist;
-    // FE[i * patt.num_edges + j] = - dist;
 
     CE_t[j * data.num_edges + i] = dist;
     RE_t[j * data.num_edges + i] = - dist;
@@ -229,29 +208,14 @@ int main ( int argc, char * argv[] ) {
     cdist_edge
   );
 
-  // nvtxRangePushA("col");
-  // ac::host::ColumnSoftmax2(data.num_nodes, patt.num_nodes, CV);
-  // ac::host::ColumnSoftmax2(data.num_nodes, patt.num_nodes, MU);
-  // ac::host::ColumnSoftmax2(data.num_edges, patt.num_edges, CE);
-  // ac::host::ColumnSoftmax2(data.num_edges, patt.num_edges, RE);
-  // ac::host::ColumnSoftmax2(data.num_edges, patt.num_edges, FE);
-  // nvtxRangePop();
-
   // Normalize distance matrices (could all happen in parallel)
-  nvtxRangePushA("row");
   ac::host::RowSoftmax2(patt.num_nodes, data.num_nodes, CV_t);
   ac::host::RowSoftmax2(patt.num_nodes, data.num_nodes, MU_t);
   ac::host::RowSoftmax2(patt.num_edges, data.num_edges, CE_t);
   ac::host::RowSoftmax2(patt.num_edges, data.num_edges, RE_t);
   ac::host::RowSoftmax2(patt.num_edges, data.num_edges, FE_t);
-  nvtxRangePop();
 
   auto RepeatColumnsByPatternEdges_op = [=] __device__(Int const& offset) {
-      // Int i     = offset / patt.num_edges;
-      // Int j     = offset % patt.num_edges;
-      // VR[offset] = MU[i * patt.num_nodes + patt.srcs[j]];
-      // VF[offset] = MU[i * patt.num_nodes + patt.dsts[j]];
-
       Int i                        = offset / patt.num_edges;
       Int j                        = offset % patt.num_edges;
       VR_t[i + data.num_nodes * j] = MU_t[i + data.num_nodes * patt.srcs[j]];
@@ -264,31 +228,8 @@ int main ( int argc, char * argv[] ) {
     RepeatColumnsByPatternEdges_op
   );
 
-  // Hardcode Cnull to 0
-  // cudaMemset(Cnull, 0, patt.num_edges * sizeof(Real));
-
-  // Compute max over columns of VF/VR
-  // ac::host::ColumnMax2(data.num_nodes, patt.num_edges, VF, VFmax);
-  // ac::host::ColumnMax2(data.num_nodes, patt.num_edges, VR, VRmax);
-
   ac::host::RowMax2(patt.num_edges, data.num_nodes, VF_t, VFmax);
   ac::host::RowMax2(patt.num_edges, data.num_nodes, VR_t, VRmax);
-    
-  // ac::host::EdgeMaxReduce2(
-  //   data.num_edges, data.num_nodes, patt.num_edges,
-  //   VFmax,
-  //   RE,
-  //   RMax,
-  //   data.srcs
-  // );
-  
-  // ac::host::EdgeMaxReduce2(
-  //   data.num_edges, data.num_nodes, patt.num_edges,
-  //   VRmax,
-  //   FE,
-  //   FMax,
-  //   data.dsts
-  // );
 
   ac::host::EdgeMaxReduce2_t(
     data.num_edges, data.num_nodes, patt.num_edges,
@@ -305,25 +246,12 @@ int main ( int argc, char * argv[] ) {
     FMax_t,
     data.dsts
   );
-
-  long long elapsed2 = timer2.stop();
-  std::cerr << "elapsed2=" << elapsed2 << std::endl;
-
-  // >>
-  transpose(CV_t, CV, patt.num_nodes, data.num_nodes);
-  transpose(MU_t, MU, patt.num_nodes, data.num_nodes);
-  transpose(CE_t, CE, patt.num_edges, data.num_edges);
-  transpose(RE_t, RE, patt.num_edges, data.num_edges);
-  transpose(FE_t, FE, patt.num_edges, data.num_edges);
-  transpose(VR_t, VR, patt.num_edges, data.num_nodes);
-  transpose(VF_t, VF, patt.num_edges, data.num_nodes);
-  transpose(RMax_t, RMax, patt.num_edges, data.num_nodes);
-  transpose(FMax_t, FMax, patt.num_edges, data.num_nodes);
-  // << 
-
+  
+  nvtxRangePop();
+  
   // --
   // Run
-
+  
   Real* MU_tmp;
   Real* RE_tmp;
   Real* FE_tmp;
@@ -333,11 +261,13 @@ int main ( int argc, char * argv[] ) {
 
   for (Int i = 0; i < patt.num_nodes; i++) {
     nvtxRangePushA("loop");
+    
+    nvtxRangePushA("step1");
     auto RepeatColumnsByPatternEdgesSubtract_op = [=] __device__(Int const& offset) {
-      Int i      = offset / patt.num_edges;
-      Int j      = offset % patt.num_edges;
-      VF[offset] = MU[i * patt.num_nodes + patt.dsts[j]] - FMax[offset]; // random columns
-      VR[offset] = MU[i * patt.num_nodes + patt.srcs[j]] - RMax[offset]; // random columns
+      Int i = offset % data.num_nodes;
+      Int j = offset / data.num_nodes;
+      VF_t[offset] = MU_t[i + data.num_nodes * patt.dsts[j]] - FMax_t[offset];
+      VR_t[offset] = MU_t[i + data.num_nodes * patt.srcs[j]] - RMax_t[offset];
     };
     thrust::for_each(
       thrust::device,
@@ -345,12 +275,14 @@ int main ( int argc, char * argv[] ) {
       thrust::make_counting_iterator<Int>(data.num_nodes * patt.num_edges),
       RepeatColumnsByPatternEdgesSubtract_op
     );
+    nvtxRangePop();
 
+    nvtxRangePushA("step2");
     auto RepeatColumnsByDataEdges_op = [=] __device__(Int const& offset) {
-      Int ij     = offset / patt.num_edges;
-      Int km     = offset % patt.num_edges;
-      FE[offset] = VR[data.srcs[ij] * patt.num_edges + km] - CE[offset]; // random rows
-      RE[offset] = VF[data.srcs[ij] * patt.num_edges + km] - CE[offset]; // random rows
+      Int i = offset % data.num_edges;
+      Int j = offset / data.num_edges;
+      FE_t[offset] = VR_t[data.srcs[i] + data.num_nodes * j] - CE_t[offset];
+      RE_t[offset] = VF_t[data.srcs[i] + data.num_nodes * j] - CE_t[offset];
     };
     thrust::for_each(
       thrust::device,
@@ -358,38 +290,54 @@ int main ( int argc, char * argv[] ) {
       thrust::make_counting_iterator<Int>(data.num_edges * patt.num_edges),
       RepeatColumnsByDataEdges_op
     );
+    nvtxRangePop();
     
-    ac::host::ColumnMax2(data.num_nodes, patt.num_edges, VF, VFmax);               // x.max(axis=0)
-    ac::host::ColumnSoftmax2_prealloc(data.num_edges, patt.num_edges, RE, RE_tmp); // x.softmax(axis=0)
-    ac::host::EdgeMaxReduce2(
+    nvtxRangePushA("step3");
+    nvtxRangePushA("step3_a");
+    ac::host::RowMax2(patt.num_edges, data.num_nodes, VF_t, VFmax);               // x.max(axis=0)
+    nvtxRangePop();
+    nvtxRangePushA("step3_b");
+    ac::host::RowSoftmax2_prealloc(patt.num_edges, data.num_edges, RE_t, RE_tmp); // x.softmax(axis=0)
+    nvtxRangePop();
+    nvtxRangePushA("step3_c");
+    ac::host::EdgeMaxReduce2_t(
       data.num_edges, data.num_nodes, patt.num_edges,
-      VFmax, RE, RMax,
+      VFmax, RE_t, RMax_t,
       data.srcs
     );
+    nvtxRangePop();
+    nvtxRangePop();
     
-    ac::host::ColumnMax2(data.num_nodes, patt.num_edges, VR, VRmax);               // x.max(axis=0)
-    ac::host::ColumnSoftmax2_prealloc(data.num_edges, patt.num_edges, FE, FE_tmp); // x.softmax(axis=0)
-    ac::host::EdgeMaxReduce2(
+    nvtxRangePushA("step4");
+    ac::host::RowMax2(patt.num_edges, data.num_nodes, VR_t, VRmax);               // x.max(axis=0)
+    ac::host::RowSoftmax2_prealloc(patt.num_edges, data.num_edges, FE_t, FE_tmp); // x.softmax(axis=0)
+    ac::host::EdgeMaxReduce2_t(
       data.num_edges, data.num_nodes, patt.num_edges,
-      VRmax, FE, FMax,
+      VRmax, FE_t, FMax_t,
       data.dsts
     );
+    nvtxRangePop();
 
-    ac::host::ComputeMU2(
+    nvtxRangePushA("step5");
+    ac::host::ComputeMU2_t(
       data.num_nodes, patt.num_edges,
       data.num_nodes, patt.num_nodes,
-      CV,
-      FMax,
-      RMax,
+      CV_t,
+      FMax_t,
+      RMax_t,
       patt.srcs,
       patt.dsts,
-      MU
+      MU_t
     );
     
-    ac::host::ColumnSoftmax2_prealloc(data.num_nodes, patt.num_nodes, MU, MU_tmp);
+    ac::host::RowSoftmax2_prealloc(patt.num_nodes, data.num_nodes, MU_t, MU_tmp);
+    nvtxRangePop();
+    
     nvtxRangePop();
   }
 
+  transpose(MU_t, MU, patt.num_nodes, data.num_nodes);
+  
   long long elapsed = timer.stop();
   std::cerr << "elapsed=" << elapsed << std::endl;
 
