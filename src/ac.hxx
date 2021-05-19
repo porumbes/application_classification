@@ -201,6 +201,8 @@ namespace ac {
       cudaMalloc(&XMax_t,  data_num_nodes * size * sizeof(Real)); // needs copy back
       cudaMalloc(&XE_tmp,                   size * sizeof(Real)); // local
       
+      // also need static local copies of `data.srcs` and `data.dsts`
+      
       cudaMemcpy(VYmax,    g_VYmax + start,                    size * sizeof(Real),  cudaMemcpyDeviceToDevice);
       cudaMemcpy(CE_t,      g_CE_t + start * data_num_edges,   data_num_edges * size * sizeof(Real),  cudaMemcpyDeviceToDevice);
       cudaMemcpy(XE_t,      g_XE_t + start * data_num_edges,   data_num_edges * size * sizeof(Real),  cudaMemcpyDeviceToDevice);
