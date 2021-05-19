@@ -208,7 +208,6 @@ int main ( int argc, char * argv[] ) {
     cdist_edge
   );
 
-  // Normalize distance matrices (could all happen in parallel)
   ac::host::RowSoftmax2(patt.num_nodes, data.num_nodes, CV_t);
   ac::host::RowSoftmax2(patt.num_nodes, data.num_nodes, MU_t);
   ac::host::RowSoftmax2(patt.num_edges, data.num_edges, CE_t);
