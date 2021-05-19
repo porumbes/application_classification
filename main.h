@@ -38,9 +38,17 @@ namespace ac {
   namespace host {
 
     void ColumnMax2(Int, Int, Real*, Real*);
+    void RowMax2(IntT, IntT, FloatT*, FloatT*);
+
     void ColumnSoftmax2(Int, Int, Real*);
     void ColumnSoftmax2_prealloc(Int, Int, Real*, Real*);
+
+    void RowSoftmax2(Int, Int, Real*);
+    void RowSoftmax2_prealloc(Int, Int, Real*, Real*);
+    
     void EdgeMaxReduce2(Int, Int, Int, Real*, Real*, Real*, Int*);
+    void EdgeMaxReduce2_t(Int, Int, Int, Real*, Real*, Real*, Int*);
+    
     void ComputeMU2(
       Int row_in,
       Int col_in,
