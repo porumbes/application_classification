@@ -151,7 +151,46 @@ int main ( int argc, char * argv[] ) {
   cudaMalloc(&MU_tmp, patt.num_nodes * sizeof(Real));
   cudaMalloc(&RE_tmp, patt.num_edges * sizeof(Real));
   cudaMalloc(&FE_tmp, patt.num_edges * sizeof(Real));
+
+  Real** all_CE_t = (Real**)malloc(n_gpus * sizeof(Real*));
+  Real** all_FE_t = (Real**)malloc(n_gpus * sizeof(Real*));
+  Real** all_RE_t = (Real**)malloc(n_gpus * sizeof(Real*));
+  Real** all_VF_t = (Real**)malloc(n_gpus * sizeof(Real*));
+  Real** all_VR_t = (Real**)malloc(n_gpus * sizeof(Real*));
+  Real** all_FMax_t = (Real**)malloc(n_gpus * sizeof(Real*));
+  Real** all_RMax_t = (Real**)malloc(n_gpus * sizeof(Real*));
+  Real** all_VFmax = (Real**)malloc(n_gpus * sizeof(Real*));
+  Real** all_VRmax = (Real**)malloc(n_gpus * sizeof(Real*));
+  Real** all_FE_tmp = (Real**)malloc(n_gpus * sizeof(Real*));
+  Real** all_RE_tmp = (Real**)malloc(n_gpus * sizeof(Real*));
+  Int** all_data_srcs = (Int**)malloc(n_gpus * sizeof(Int**));
+  Int** all_data_dsts = (Int**)malloc(n_gpus * sizeof(Int**));
+  Int** all_patt_srcs = (Int**)malloc(n_gpus * sizeof(Int**));
+  Int** all_patt_dsts = (Int**)malloc(n_gpus * sizeof(Int**));
+
+  shard_alloc_n(all_CE_t, n_gpus, patt.num_edges, data.num_edges, starts, ends);
+
+  shard_alloc_n(all_FMax_t, n_gpus, patt.num_edges, data.num_nodes, starts, ends);
+  shard_alloc_n(all_RMax_t, n_gpus, patt.num_edges, data.num_nodes, starts, ends);
   
+  copy_alloc_n(all_data_srcs, n_gpus, data.num_edges, 1);
+  copy_alloc_n(all_data_dsts, n_gpus, data.num_edges, 1);
+
+  copy_alloc_n(all_patt_srcs, n_gpus, patt.num_edges, 1);
+  copy_alloc_n(all_patt_dsts, n_gpus, patt.num_edges, 1);
+  
+  shard_alloc_n(all_FE_t, n_gpus, patt.num_edges, data.num_edges, starts, ends);
+  shard_alloc_n(all_RE_t, n_gpus, patt.num_edges, data.num_edges, starts, ends);
+  
+  shard_alloc_n(all_VF_t, n_gpus, patt.num_edges, data.num_nodes, starts, ends);
+  shard_alloc_n(all_VR_t, n_gpus, patt.num_edges, data.num_nodes, starts, ends);
+
+  shard_alloc_n(all_VFmax, n_gpus, patt.num_edges, 1, starts, ends);
+  shard_alloc_n(all_VRmax, n_gpus, patt.num_edges, 1, starts, ends);
+  
+  shard_alloc_n(all_FE_tmp, n_gpus, patt.num_edges, 1, starts, ends);
+  shard_alloc_n(all_RE_tmp, n_gpus, patt.num_edges, 1, starts, ends);
+
   // --
   // Initialize algorithm
 
@@ -204,47 +243,15 @@ int main ( int argc, char * argv[] ) {
   nvtxRangePop();
   
   nvtxRangePushA("scatter");
-  for(Int i = 0; i < n_gpus; i++) {
-    cudaSetDevice(i);
-    cudaDeviceSynchronize();
-    cudaSetDevice(0);
-  }
 
-  Real** all_CE_t = (Real**)malloc(n_gpus * sizeof(Real*));
   shard_n(CE_t, all_CE_t, n_gpus, patt.num_edges, data.num_edges, starts, ends);
 
-  Real** all_FE_t = (Real**)malloc(n_gpus * sizeof(Real*));
-  Real** all_RE_t = (Real**)malloc(n_gpus * sizeof(Real*));
-  shard_n(FE_t, all_FE_t, n_gpus, patt.num_edges, data.num_edges, starts, ends);
-  shard_n(RE_t, all_RE_t, n_gpus, patt.num_edges, data.num_edges, starts, ends);
-  
-  Real** all_VF_t = (Real**)malloc(n_gpus * sizeof(Real*));
-  Real** all_VR_t = (Real**)malloc(n_gpus * sizeof(Real*));
-  shard_n(VF_t, all_VF_t, n_gpus, patt.num_edges, data.num_nodes, starts, ends);
-  shard_n(VR_t, all_VR_t, n_gpus, patt.num_edges, data.num_nodes, starts, ends);
-
-  Real** all_FMax_t = (Real**)malloc(n_gpus * sizeof(Real*));
-  Real** all_RMax_t = (Real**)malloc(n_gpus * sizeof(Real*));
   shard_n(FMax_t, all_FMax_t, n_gpus, patt.num_edges, data.num_nodes, starts, ends);
   shard_n(RMax_t, all_RMax_t, n_gpus, patt.num_edges, data.num_nodes, starts, ends);
-
-  Real** all_VFmax = (Real**)malloc(n_gpus * sizeof(Real*));
-  Real** all_VRmax = (Real**)malloc(n_gpus * sizeof(Real*));
-  shard_n(VFmax, all_VFmax, n_gpus, patt.num_edges, 1, starts, ends);
-  shard_n(VRmax, all_VRmax, n_gpus, patt.num_edges, 1, starts, ends);
   
-  Real** all_FE_tmp = (Real**)malloc(n_gpus * sizeof(Real*));
-  Real** all_RE_tmp = (Real**)malloc(n_gpus * sizeof(Real*));
-  shard_n(FE_tmp, all_FE_tmp, n_gpus, patt.num_edges, 1, starts, ends);
-  shard_n(RE_tmp, all_RE_tmp, n_gpus, patt.num_edges, 1, starts, ends);
-    
-  Int** all_data_srcs = (Int**)malloc(n_gpus * sizeof(Int**));
-  Int** all_data_dsts = (Int**)malloc(n_gpus * sizeof(Int**));
-  copy_n(data.srcs, all_data_srcs, n_gpus, data.num_edges, 1);
+  copy_n(data.srcs, all_data_srcs, n_gpus, data.num_edges, 1); // could use nccl
   copy_n(data.dsts, all_data_dsts, n_gpus, data.num_edges, 1);
 
-  Int** all_patt_srcs = (Int**)malloc(n_gpus * sizeof(Int**));
-  Int** all_patt_dsts = (Int**)malloc(n_gpus * sizeof(Int**));
   copy_n(patt.srcs, all_patt_srcs, n_gpus, patt.num_edges, 1);
   copy_n(patt.dsts, all_patt_dsts, n_gpus, patt.num_edges, 1);
 

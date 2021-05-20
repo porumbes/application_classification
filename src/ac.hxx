@@ -13,13 +13,10 @@ template <typename val_t>
 void copy_n(val_t* in, val_t** out, Int n_gpus, Int n_rows, Int n_cols) {
   auto nbytes = n_rows * n_cols * sizeof(val_t);
   
+  #pragma omp parallel for num_threads(n_gpus)
   for(Int i = 0; i < n_gpus; i++) {
     cudaSetDevice(i);
-    
-    val_t* tmp;
-    cudaMalloc(&tmp, nbytes);
-    cudaMemcpy(tmp, in, nbytes, cudaMemcpyDeviceToDevice);
-    out[i] = tmp;
+    cudaMemcpy(out[i], in, nbytes, cudaMemcpyDeviceToDevice);
   }
   
   cudaSetDevice(0);
@@ -27,6 +24,44 @@ void copy_n(val_t* in, val_t** out, Int n_gpus, Int n_rows, Int n_cols) {
 
 template <typename val_t>
 void shard_n(val_t* in, val_t** out, Int n_gpus, Int n_rows, Int n_cols, Int* starts, Int* ends) {
+  
+  #pragma omp parallel for num_threads(n_gpus)
+  for(Int i = 0; i < n_gpus; i++) {
+    
+    cudaSetDevice(i);
+    
+    Int start  = starts[i];
+    Int end    = ends[i];
+    Int l_rows = end - start;
+    
+    auto nbytes = l_rows * n_cols * sizeof(val_t);
+    
+    cudaMemcpy(out[i], in + start * n_cols, nbytes, cudaMemcpyDeviceToDevice);
+  }
+  
+  cudaSetDevice(0);
+}
+
+template <typename val_t>
+void copy_alloc_n(val_t** out, Int n_gpus, Int n_rows, Int n_cols) {
+  auto nbytes = n_rows * n_cols * sizeof(val_t);
+  
+  #pragma omp parallel for num_threads(n_gpus)
+  for(Int i = 0; i < n_gpus; i++) {
+    cudaSetDevice(i);
+    
+    val_t* tmp;
+    cudaMalloc(&tmp, nbytes);
+    out[i] = tmp;
+  }
+  
+  cudaSetDevice(0);
+}
+
+template <typename val_t>
+void shard_alloc_n(val_t** out, Int n_gpus, Int n_rows, Int n_cols, Int* starts, Int* ends) {
+  
+  #pragma omp parallel for num_threads(n_gpus)
   for(Int i = 0; i < n_gpus; i++) {
     
     cudaSetDevice(i);
@@ -39,24 +74,7 @@ void shard_n(val_t* in, val_t** out, Int n_gpus, Int n_rows, Int n_cols, Int* st
     
     val_t* tmp;
     cudaMalloc(&tmp, nbytes);
-    cudaMemcpy(tmp,  in + start * n_cols, nbytes, cudaMemcpyDeviceToDevice);
     out[i] = tmp;
-  }
-  
-  cudaSetDevice(0);
-}
-
-template <typename val_t>
-void shard_n_prealloc(val_t* in, val_t** out, Int n_gpus, Int n_rows, Int n_cols, Int* starts, Int* ends) {
-  for(Int i = 0; i < n_gpus; i++) {
-    cudaSetDevice(i);
-    
-    Int start  = starts[i];
-    Int end    = ends[i];
-    Int l_rows = end - start;
-    
-    auto nbytes = l_rows * n_cols * sizeof(val_t);
-    cudaMemcpy(out[i], in + start * n_cols, nbytes, cudaMemcpyDeviceToDevice);
   }
   
   cudaSetDevice(0);
@@ -242,26 +260,30 @@ namespace ac {
       Int* srcs    = all_srcs[gid];
       Int* nodes   = all_nodes[gid];
       
+      auto policy = thrust::cuda::par.on(infos[gid].stream);
+      
+      nvtxRangePushA("op1");
       auto update_XE = [=] __device__(Int const& offset) {
         Int r        = offset / data_num_edges;
         Int c        = offset % data_num_edges;
         XE_t[offset] = VY_t[data_num_nodes * r + srcs[c]] - CE_t[offset];
       };
       thrust::for_each_n(
-        thrust::cuda::par.on(infos[gid].stream),
+        policy,
         thrust::make_counting_iterator<Int>(0),
         size * data_num_edges,
         update_XE
       );
-      cudaStreamWaitEvent(infos[gid].stream, infos[gid].event, 0);
+      nvtxRangePop();
       
       // --
       
+      nvtxRangePushA("op2");
       thrust::equal_to<Int> binary_pred;
       thrust::maximum<Real> binary_op;
       
       thrust::reduce_by_key(
-        thrust::cuda::par.on(infos[gid].stream),
+        policy,
         thrust::make_transform_iterator(
           thrust::make_counting_iterator<Int>(0), 
           floor_functor(data_num_nodes)
@@ -276,16 +298,18 @@ namespace ac {
         binary_pred,
         binary_op
       );
+      nvtxRangePop();
       
       // --
       
+      nvtxRangePushA("op3");
       auto exp_op  = [=] __device__(Real const& val) -> Real { return exp(val); };
       auto log_op  = [=] __device__(Real const& val) -> Real { return log(val); };
       auto sub_row = [=] __device__(Int const& idx)  -> void { XE_t[idx] -= XE_tmp[idx / data_num_edges]; };
           
-      thrust::transform(thrust::cuda::par.on(infos[gid].stream), XE_t, XE_t + (size * data_num_edges), XE_t, exp_op);
+      thrust::transform(policy, XE_t, XE_t + (size * data_num_edges), XE_t, exp_op);
       thrust::reduce_by_key(
-        thrust::cuda::par.on(infos[gid].stream),
+        policy,
         thrust::make_transform_iterator(
           thrust::make_counting_iterator<Int>(0),
           floor_functor(data_num_edges)
@@ -298,15 +322,18 @@ namespace ac {
         thrust::make_discard_iterator(),
         XE_tmp
       );
+      nvtxRangePop();
       
-      thrust::transform(thrust::cuda::par.on(infos[gid].stream), XE_tmp, XE_tmp + size, XE_tmp, log_op);
-      thrust::transform(thrust::cuda::par.on(infos[gid].stream), XE_t, XE_t + (size * data_num_edges), XE_t, log_op);
+      nvtxRangePushA("op4");
+      thrust::transform(policy, XE_tmp, XE_tmp + size, XE_tmp, log_op);
+      thrust::transform(policy, XE_t, XE_t + (size * data_num_edges), XE_t, log_op);
       thrust::for_each(
-        thrust::cuda::par.on(infos[gid].stream),
+        policy,
         thrust::make_counting_iterator<Int>(0),
         thrust::make_counting_iterator<Int>(size * data_num_edges),
         sub_row
       );
+      nvtxRangePop();
       
       // --
       
@@ -320,26 +347,32 @@ namespace ac {
         atomicMax(XMax_t + (data_num_nodes * r) + nodes[c], XE_t[offset]);
       };
       
+      nvtxRangePushA("op5");
       thrust::for_each_n(
-        thrust::cuda::par.on(infos[gid].stream), 
+        policy, 
         thrust::make_counting_iterator<Int>(0), 
         size * data_num_nodes,
         fill_op
       );
+      nvtxRangePop();
       
+      nvtxRangePushA("op6");
       thrust::for_each_n(
-        thrust::cuda::par.on(infos[gid].stream), 
+        policy, 
         thrust::make_counting_iterator<Int>(0), 
         size * data_num_edges,
         max_op
       );
+      nvtxRangePop();
       
+      nvtxRangePushA("op7");
       thrust::copy_n(
-        thrust::cuda::par.on(infos[gid].stream),
+        policy,
         XMax_t,
         data_num_nodes * size,
         XMax_t_out + (data_num_nodes * start)
       );
+      nvtxRangePop();
       
       cudaEventRecord(infos[gid].event, infos[gid].stream);
     }
