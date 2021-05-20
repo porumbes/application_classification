@@ -1,8 +1,86 @@
 #include <iostream>
 #include "thrust/device_vector.h"
 #include <thrust/iterator/discard_iterator.h>
+#include <cub/cub.cuh>
 
 #include "helpers.hxx"
+
+template <typename Op>
+struct row_reducer_t {
+
+  Real* d_out;
+  Real* d_in;
+  Int num_rows;
+  Int num_cols;
+  Op reduce_op;
+  Real initial_value;
+  cudaStream_t stream;
+
+  Int* d_offsets;
+  void *d_temp_storage = NULL;
+  size_t temp_storage_bytes = 0;
+
+  row_reducer_t(
+    Real* _d_out,
+    Real* _d_in,  
+    Int _num_rows, 
+    Int _num_cols, 
+    Op _reduce_op, 
+    Real _initial_value, 
+    cudaStream_t _stream
+  ) :
+    d_out(_d_out),
+    d_in(_d_in),
+    num_rows(_num_rows),
+    num_cols(_num_cols),
+    reduce_op(_reduce_op),
+    initial_value(_initial_value),
+    stream(_stream)
+  {
+
+    Int *h_offsets = (Int*)malloc((num_rows + 1) * sizeof(Int));
+    for(Int i = 0; i < num_rows + 1; i++) {
+      h_offsets[i] = i * num_cols;
+    }
+    
+    cudaMalloc((void**)&d_offsets, (num_rows + 1) * sizeof(Int));
+    cudaMemcpy(d_offsets, h_offsets, (num_rows + 1) * sizeof(Int), cudaMemcpyHostToDevice);
+
+    cub::DeviceSegmentedReduce::Reduce(d_temp_storage, temp_storage_bytes,
+      d_in, d_out, num_rows, d_offsets, d_offsets + 1, reduce_op, initial_value, stream);
+    cudaMalloc(&d_temp_storage, temp_storage_bytes);
+  }
+  
+  void run() {
+    cub::DeviceSegmentedReduce::Reduce(d_temp_storage, temp_storage_bytes,
+      d_in, d_out, num_rows, d_offsets, d_offsets + 1, reduce_op, initial_value, stream);
+  }
+};
+
+template<typename Op>
+void __row_reduce(Real * d_out, Real * d_in, Int num_rows, Int num_cols, Op reduce_op, Real initial_value, cudaStream_t stream, 
+  void* d_temp_storage, size_t temp_storage_bytes, Int* d_offsets) {
+
+//   void *d_temp_storage = NULL;
+//   size_t temp_storage_bytes = 0;
+
+//   Int *h_offsets = (Int*)malloc((num_rows + 1) * sizeof(Int));
+//   for(Int i = 0; i < num_rows + 1; i++) {
+//     h_offsets[i] = i * num_cols;
+//   }
+//   Int *d_offsets;
+//   cudaMalloc((void**)&d_offsets, (num_rows + 1) * sizeof(Int));
+//   cudaMemcpy(d_offsets, h_offsets, (num_rows + 1) * sizeof(Int), cudaMemcpyHostToDevice);
+
+//   cub::DeviceSegmentedReduce::Reduce(d_temp_storage, temp_storage_bytes,
+//     d_in, d_out, num_rows, d_offsets, d_offsets + 1, reduce_op, initial_value, stream);
+//   cudaMalloc(&d_temp_storage, temp_storage_bytes);
+  cub::DeviceSegmentedReduce::Reduce(d_temp_storage, temp_storage_bytes,
+    d_in, d_out, num_rows, d_offsets, d_offsets + 1, reduce_op, initial_value, stream);
+
+//   cudaFree(d_offsets);
+//   cudaFree(d_temp_storage);
+}
 
 struct gpu_info {
     cudaStream_t stream;
@@ -233,7 +311,9 @@ namespace ac {
     Int* starts,
     Int* ends,
     Real* XMax_t_out,
-    std::vector<gpu_info> infos
+    std::vector<gpu_info> infos,
+    std::vector<row_reducer_t<decltype(cub::Max())>>& max_reducers,
+    std::vector<row_reducer_t<decltype(cub::Sum())>>& sum_reducers
   ) {
     
     // VY_t   : (patt_num_edges, data_num_nodes) // read from subset of rows
@@ -279,25 +359,7 @@ namespace ac {
       // --
       
       nvtxRangePushA("op2");
-      thrust::equal_to<Int> binary_pred;
-      thrust::maximum<Real> binary_op;
-      
-      thrust::reduce_by_key(
-        policy,
-        thrust::make_transform_iterator(
-          thrust::make_counting_iterator<Int>(0), 
-          floor_functor(data_num_nodes)
-        ),
-        thrust::make_transform_iterator(
-          thrust::make_counting_iterator<Int>(size * data_num_nodes),
-          floor_functor(data_num_nodes)
-        ),
-        VY_t,
-        thrust::make_discard_iterator(),
-        VYmax,
-        binary_pred,
-        binary_op
-      );
+      max_reducers[gid].run();
       nvtxRangePop();
       
       // --
@@ -308,20 +370,7 @@ namespace ac {
       auto sub_row = [=] __device__(Int const& idx)  -> void { XE_t[idx] -= XE_tmp[idx / data_num_edges]; };
           
       thrust::transform(policy, XE_t, XE_t + (size * data_num_edges), XE_t, exp_op);
-      thrust::reduce_by_key(
-        policy,
-        thrust::make_transform_iterator(
-          thrust::make_counting_iterator<Int>(0),
-          floor_functor(data_num_edges)
-        ),
-        thrust::make_transform_iterator(
-          thrust::make_counting_iterator<Int>(size * data_num_edges),
-          floor_functor(data_num_edges)
-        ),
-        XE_t,
-        thrust::make_discard_iterator(),
-        XE_tmp
-      );
+      sum_reducers[gid].run();
       nvtxRangePop();
       
       nvtxRangePushA("op4");
@@ -366,7 +415,7 @@ namespace ac {
       nvtxRangePop();
       
       nvtxRangePushA("op7");
-      thrust::copy_n(
+      thrust::copy_n( // could possibly update MU_t directly, instead of copying and then doing a single GPU
         policy,
         XMax_t,
         data_num_nodes * size,

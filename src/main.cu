@@ -191,6 +191,34 @@ int main ( int argc, char * argv[] ) {
   shard_alloc_n(all_FE_tmp, n_gpus, patt.num_edges, 1, starts, ends);
   shard_alloc_n(all_RE_tmp, n_gpus, patt.num_edges, 1, starts, ends);
 
+  std::vector<row_reducer_t<decltype(cub::Max())>> F_max_reducers;
+  std::vector<row_reducer_t<decltype(cub::Max())>> R_max_reducers;
+  std::vector<row_reducer_t<decltype(cub::Sum())>> F_sum_reducers;
+  std::vector<row_reducer_t<decltype(cub::Sum())>> R_sum_reducers;
+  // std::vector<row_reducer_t> sum_reducers;
+  for(Int gid = 0; gid < n_gpus; gid++) {
+    cudaSetDevice(gid);
+    
+    row_reducer_t<decltype(cub::Max())> F_max_reducer(
+      all_VFmax[gid], all_VF_t[gid], ends[gid] - starts[gid], data.num_nodes, cub::Max(), -99999, infos[gid].stream
+    );
+    row_reducer_t<decltype(cub::Max())> R_max_reducer(
+      all_VRmax[gid], all_VR_t[gid], ends[gid] - starts[gid], data.num_nodes, cub::Max(), -99999, infos[gid].stream
+    );
+    row_reducer_t<decltype(cub::Sum())> F_sum_reducer(
+      all_RE_tmp[gid], all_RE_t[gid], ends[gid] - starts[gid], data.num_edges, cub::Sum(), 0, infos[gid].stream
+    );
+    row_reducer_t<decltype(cub::Sum())> R_sum_reducer(
+      all_FE_tmp[gid], all_FE_t[gid], ends[gid] - starts[gid], data.num_edges, cub::Sum(), 0, infos[gid].stream
+    );
+    
+    R_max_reducers.push_back(R_max_reducer);
+    F_max_reducers.push_back(F_max_reducer);
+    R_sum_reducers.push_back(R_sum_reducer);
+    F_sum_reducers.push_back(F_sum_reducer);
+  }
+  cudaSetDevice(0);
+
   // --
   // Initialize algorithm
 
@@ -271,7 +299,7 @@ int main ( int argc, char * argv[] ) {
     
     nvtxRangePushA("update_VX");
         
-    // random row access -- BAD
+    // could fuse this into updateXMax_t
     #pragma omp parallel for num_threads(n_gpus)
     for(Int gid = 0; gid < n_gpus; gid++) {
       cudaSetDevice(gid);
@@ -319,8 +347,12 @@ int main ( int argc, char * argv[] ) {
       starts,
       ends,
       RMax_t,
-      infos
+      infos,
+      F_max_reducers,
+      F_sum_reducers
     );
+    
+    // could remove synchronization here
     
     ac::updateXMax_t(
       patt.num_nodes, patt.num_edges, data.num_nodes, data.num_edges,
@@ -336,7 +368,9 @@ int main ( int argc, char * argv[] ) {
       starts,
       ends,
       FMax_t,
-      infos
+      infos,
+      R_max_reducers,
+      R_sum_reducers
     );
     
     for(Int gid = 0; gid < n_gpus; gid++)
@@ -348,7 +382,7 @@ int main ( int argc, char * argv[] ) {
     nvtxRangePushA("ComputeMU2_t");
     // random row-write -- BAD
     ac::ComputeMU2_t(
-      data.num_nodes, patt.num_edges, data.num_nodes, patt.num_nodes,
+      data.num_nodes, patt.num_edges, data.num_nodes, patt.num_nodes, // typo?
       CV_t,
       FMax_t,
       RMax_t,
