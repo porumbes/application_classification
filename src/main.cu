@@ -65,11 +65,6 @@ void loadGraph(std::string inpath, Graph* d_graph) {
 
 int main ( int argc, char * argv[] ) {
 
-  cudaStream_t master_stream;
-  cudaEvent_t master_event;
-  cudaStreamCreateWithFlags(&master_stream, cudaStreamNonBlocking);
-  cudaEventCreate(&master_event);
-
   // --
   // IO
 
@@ -79,6 +74,53 @@ int main ( int argc, char * argv[] ) {
   loadGraph(argv[1], &data);
   loadGraph(argv[2], &patt);
 
+  // --
+  // Setup GPUs
+  
+  cudaStream_t master_stream;
+  cudaEvent_t master_event;
+  cudaStreamCreateWithFlags(&master_stream, cudaStreamNonBlocking);
+  cudaEventCreate(&master_event);
+
+  int _n_gpus = 1;
+  cudaGetDeviceCount(&_n_gpus);
+  Int n_gpus = (Int)(_n_gpus);
+  
+  for(Int i = 0; i < n_gpus; i++) {
+      cudaSetDevice(i);
+      for(Int j = 0; j < n_gpus; j++) {
+          if(i == j) continue;
+          cudaDeviceEnablePeerAccess(j, 0);
+      }
+  }
+  cudaSetDevice(0);
+  
+  std::vector<gpu_info> infos;
+  
+  for(Int i = 0 ; i < n_gpus ; i++) {
+      gpu_info info;
+      cudaSetDevice(i);
+      cudaStreamCreateWithFlags(&info.stream, cudaStreamNonBlocking);
+      cudaEventCreate(&info.event);
+      infos.push_back(info);
+  }
+  cudaSetDevice(0);
+
+  Int* chunks    = (Int*)malloc(n_gpus * sizeof(Int));
+  Int* starts    = (Int*)malloc(n_gpus * sizeof(Int));
+  Int* ends      = (Int*)malloc(n_gpus * sizeof(Int));
+  
+  for(Int i = 0; i < n_gpus; i++)         chunks[i] = 0;
+  for(Int i = 0; i < patt.num_edges; i++) chunks[i % n_gpus]++;
+  
+  starts[0] = 0;
+  ends[0]   = chunks[0];
+  for(Int i = 1; i < n_gpus; i++) {
+      starts[i] = chunks[i] + starts[i - 1];
+      ends[i]   = chunks[i] + ends[i - 1];
+  }
+  ends[n_gpus - 1] = patt.num_edges;
+  
   // --
   // Allocate memory
 
@@ -115,6 +157,7 @@ int main ( int argc, char * argv[] ) {
 
   cuda_timer_t timer;
   timer.start();
+  nvtxRangePushA("start");
   
   nvtxRangePushA("prep");
 
@@ -160,27 +203,13 @@ int main ( int argc, char * argv[] ) {
   
   nvtxRangePop();
   
-  Int n_gpus = 4;
-    
-  std::vector<gpu_info> infos;
-  
-  for(Int i = 0 ; i < n_gpus ; i++) {
-      gpu_info info;
-      // cudaSetDevice(i);
-      cudaStreamCreateWithFlags(&info.stream, cudaStreamNonBlocking);
-      cudaEventCreate(&info.event);
-      infos.push_back(info);
+  nvtxRangePushA("scatter");
+  for(Int i = 0; i < n_gpus; i++) {
+    cudaSetDevice(i);
+    cudaDeviceSynchronize();
+    cudaSetDevice(0);
   }
 
-  Int* starts    = (Int*)malloc(n_gpus * sizeof(Int));
-  Int* ends      = (Int*)malloc(n_gpus * sizeof(Int));
-  Int chunk_size = (patt.num_edges + n_gpus - 1) / n_gpus;
-  for(Int i = 0; i < n_gpus; i++) {
-      starts[i] = i       * chunk_size;
-      ends[i]   = (i + 1) * chunk_size;
-  }
-  ends[n_gpus - 1] = patt.num_edges;
-  
   Real** all_CE_t = (Real**)malloc(n_gpus * sizeof(Real*));
   shard_n(CE_t, all_CE_t, n_gpus, patt.num_edges, data.num_edges, starts, ends);
 
@@ -213,39 +242,72 @@ int main ( int argc, char * argv[] ) {
   Int** all_data_dsts = (Int**)malloc(n_gpus * sizeof(Int**));
   copy_n(data.srcs, all_data_srcs, n_gpus, data.num_edges, 1);
   copy_n(data.dsts, all_data_dsts, n_gpus, data.num_edges, 1);
+
+  Int** all_patt_srcs = (Int**)malloc(n_gpus * sizeof(Int**));
+  Int** all_patt_dsts = (Int**)malloc(n_gpus * sizeof(Int**));
+  copy_n(patt.srcs, all_patt_srcs, n_gpus, patt.num_edges, 1);
+  copy_n(patt.dsts, all_patt_dsts, n_gpus, patt.num_edges, 1);
+
+  for(Int i = 0; i < n_gpus; i++) {
+    cudaSetDevice(i);
+    cudaDeviceSynchronize();
+    cudaSetDevice(0);
+  }
+
+  nvtxRangePop();
   
   // --
   // Run
-
-  cudaDeviceSynchronize();
 
   for (Int i = 0; i < patt.num_nodes; i++) {
     nvtxRangePushA("loop");
     
     nvtxRangePushA("update_VX");
+    
+    for(Int i = 0; i < n_gpus; i++) {
+      cudaSetDevice(i);
+      cudaDeviceSynchronize();
+      cudaSetDevice(0);
+    }
+    
     // random row access -- BAD
-    auto update_VX = [=] __device__(Int const& offset) {
-      Int r        = offset / data.num_nodes;
-      Int c        = offset % data.num_nodes;
-      VF_t[offset] = MU_t[data.num_nodes * patt.dsts[r] + c] - FMax_t[offset];
-      VR_t[offset] = MU_t[data.num_nodes * patt.srcs[r] + c] - RMax_t[offset];
-    };
-    thrust::for_each_n(
-      thrust::cuda::par.on(master_stream),
-      thrust::make_counting_iterator<Int>(0),
-      data.num_nodes * patt.num_edges,
-      update_VX
-    );
-    cudaEventRecord(master_event, master_stream);
-    cudaStreamWaitEvent(master_stream, master_event, 0);
+    #pragma omp parallel for num_threads(n_gpus)
+    for(Int gid = 0; gid < n_gpus; gid++) {
+      cudaSetDevice(gid);
+      
+      Int start = starts[gid];
+      Int end   = ends[gid];
+      Int size  = end - start;
+      
+      Real* l_VF_t     = all_VF_t[gid];
+      Real* l_VR_t     = all_VR_t[gid];
+      Real* l_FMax_t   = all_FMax_t[gid];
+      Real* l_RMax_t   = all_RMax_t[gid];
+      Int* l_patt_srcs = all_patt_srcs[gid];
+      Int* l_patt_dsts = all_patt_dsts[gid];
+      
+      auto update_VX = [=] __device__(Int const& offset) {
+        Int r          = offset / data.num_nodes;
+        Int c          = offset % data.num_nodes;
+        l_VF_t[offset] = MU_t[data.num_nodes * l_patt_dsts[start + r] + c] - l_FMax_t[offset];
+        l_VR_t[offset] = MU_t[data.num_nodes * l_patt_srcs[start + r] + c] - l_RMax_t[offset];
+      };
+      thrust::for_each_n(
+        thrust::cuda::par.on(infos[gid].stream),
+        thrust::make_counting_iterator<Int>(0),
+        size * data.num_nodes,
+        update_VX
+      );
+      cudaEventRecord(infos[gid].event, infos[gid].stream);
+    }
+
     nvtxRangePop();
+        
+    // shard_n_prealloc(VF_t, all_VF_t, n_gpus, patt.num_edges, data.num_nodes, starts, ends);
+    // shard_n_prealloc(VR_t, all_VR_t, n_gpus, patt.num_edges, data.num_nodes, starts, ends);
+
     
-    cudaDeviceSynchronize();
-    shard_n_prealloc(VF_t, all_VF_t, n_gpus, patt.num_edges, data.num_nodes, starts, ends);
-    shard_n_prealloc(VR_t, all_VR_t, n_gpus, patt.num_edges, data.num_nodes, starts, ends);
-    cudaDeviceSynchronize();
-    
-    nvtxRangePushA("updateXMax_t:1");
+    nvtxRangePushA("updateXMax_t");
     ac::updateXMax_t(
       patt.num_nodes, patt.num_edges, data.num_nodes, data.num_edges,
       all_CE_t,
@@ -263,9 +325,6 @@ int main ( int argc, char * argv[] ) {
       infos
     );
     
-    nvtxRangePop();
-    
-    nvtxRangePushA("updateXMax_t:2");
     ac::updateXMax_t(
       patt.num_nodes, patt.num_edges, data.num_nodes, data.num_edges,
       all_CE_t,
@@ -316,14 +375,14 @@ int main ( int argc, char * argv[] ) {
     nvtxRangePop();
   }
 
-  ac::transpose(MU_t, MU, patt.num_nodes, data.num_nodes);
-  
+  nvtxRangePop();
   long long elapsed = timer.stop();
   std::cerr << "elapsed=" << elapsed << std::endl;
 
   // --
   // Copy results to host and print
 
+  ac::transpose(MU_t, MU, patt.num_nodes, data.num_nodes);
   Real *h_MU = (Real *) malloc(data.num_nodes * patt.num_nodes * sizeof(Real));
   cudaMemcpy(h_MU, MU, data.num_nodes * patt.num_nodes * sizeof(Real), cudaMemcpyDeviceToHost);
   for (Int i = 0; i < data.num_nodes * patt.num_nodes; i ++) printf("%e\n", h_MU[i]);

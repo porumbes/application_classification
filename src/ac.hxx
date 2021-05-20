@@ -14,16 +14,23 @@ void copy_n(val_t* in, val_t** out, Int n_gpus, Int n_rows, Int n_cols) {
   auto nbytes = n_rows * n_cols * sizeof(val_t);
   
   for(Int i = 0; i < n_gpus; i++) {
+    cudaSetDevice(i);
+    
     val_t* tmp;
     cudaMalloc(&tmp, nbytes);
     cudaMemcpy(tmp, in, nbytes, cudaMemcpyDeviceToDevice);
     out[i] = tmp;
   }
+  
+  cudaSetDevice(0);
 }
 
 template <typename val_t>
 void shard_n(val_t* in, val_t** out, Int n_gpus, Int n_rows, Int n_cols, Int* starts, Int* ends) {
   for(Int i = 0; i < n_gpus; i++) {
+    
+    cudaSetDevice(i);
+    
     Int start  = starts[i];
     Int end    = ends[i];
     Int l_rows = end - start;
@@ -35,11 +42,15 @@ void shard_n(val_t* in, val_t** out, Int n_gpus, Int n_rows, Int n_cols, Int* st
     cudaMemcpy(tmp,  in + start * n_cols, nbytes, cudaMemcpyDeviceToDevice);
     out[i] = tmp;
   }
+  
+  cudaSetDevice(0);
 }
 
 template <typename val_t>
 void shard_n_prealloc(val_t* in, val_t** out, Int n_gpus, Int n_rows, Int n_cols, Int* starts, Int* ends) {
   for(Int i = 0; i < n_gpus; i++) {
+    cudaSetDevice(i);
+    
     Int start  = starts[i];
     Int end    = ends[i];
     Int l_rows = end - start;
@@ -47,6 +58,8 @@ void shard_n_prealloc(val_t* in, val_t** out, Int n_gpus, Int n_rows, Int n_cols
     auto nbytes = l_rows * n_cols * sizeof(val_t);
     cudaMemcpy(out[i], in + start * n_cols, nbytes, cudaMemcpyDeviceToDevice);
   }
+  
+  cudaSetDevice(0);
 }
 
 namespace ac {
@@ -214,6 +227,7 @@ namespace ac {
     
     #pragma omp parallel for num_threads(n_gpus)
     for(Int gid = 0; gid < n_gpus; gid++) {
+      cudaSetDevice(gid);
       
       Int start = starts[gid];
       Int end   = ends[gid];
@@ -294,7 +308,6 @@ namespace ac {
         sub_row
       );
       
-      
       // --
       
       auto fill_op = [=] __device__(Int const& offset) {
@@ -330,6 +343,8 @@ namespace ac {
       
       cudaEventRecord(infos[gid].event, infos[gid].stream);
     }
+    
+    cudaSetDevice(0);
   }
   
   void ComputeMU2_t(
