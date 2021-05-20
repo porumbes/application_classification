@@ -4,6 +4,51 @@
 
 #include "helpers.hxx"
 
+struct gpu_info {
+    cudaStream_t stream;
+    cudaEvent_t  event;
+};
+
+template <typename val_t>
+void copy_n(val_t* in, val_t** out, Int n_gpus, Int n_rows, Int n_cols) {
+  auto nbytes = n_rows * n_cols * sizeof(val_t);
+  
+  for(Int i = 0; i < n_gpus; i++) {
+    val_t* tmp;
+    cudaMalloc(&tmp, nbytes);
+    cudaMemcpy(tmp, in, nbytes, cudaMemcpyDeviceToDevice);
+    out[i] = tmp;
+  }
+}
+
+template <typename val_t>
+void shard_n(val_t* in, val_t** out, Int n_gpus, Int n_rows, Int n_cols, Int* starts, Int* ends) {
+  for(Int i = 0; i < n_gpus; i++) {
+    Int start  = starts[i];
+    Int end    = ends[i];
+    Int l_rows = end - start;
+    
+    auto nbytes = l_rows * n_cols * sizeof(val_t);
+    
+    val_t* tmp;
+    cudaMalloc(&tmp, nbytes);
+    cudaMemcpy(tmp,  in + start * n_cols, nbytes, cudaMemcpyDeviceToDevice);
+    out[i] = tmp;
+  }
+}
+
+template <typename val_t>
+void shard_n_prealloc(val_t* in, val_t** out, Int n_gpus, Int n_rows, Int n_cols, Int* starts, Int* ends) {
+  for(Int i = 0; i < n_gpus; i++) {
+    Int start  = starts[i];
+    Int end    = ends[i];
+    Int l_rows = end - start;
+    
+    auto nbytes = l_rows * n_cols * sizeof(val_t);
+    cudaMemcpy(out[i], in + start * n_cols, nbytes, cudaMemcpyDeviceToDevice);
+  }
+}
+
 namespace ac {
 
   struct floor_functor {
@@ -74,41 +119,32 @@ namespace ac {
     );
   }
 
-  void RowSoftmax2_prealloc(const Int n_row, const Int n_col, Real *d_x, Real* tmp) {
-    auto exp_op = [=] __device__(Real const& val) -> Real {
-      return exp(val);
-    };
-        
-    auto log_op = [=] __device__(Real const& val) -> Real {
-      return log(val);
-    };
-
-    auto sub_row = [=] __device__(Int const& offset) {
-      Int r = offset / n_col;
-      d_x[offset] -= tmp[r];
-    };
+  void RowSoftmax2_prealloc(const Int n_row, const Int n_col, Real *d_x, Real* tmp, cudaStream_t stream) {
+    auto exp_op  = [=] __device__(Real const& val) -> Real { return exp(val); };
+    auto log_op  = [=] __device__(Real const& val) -> Real { return log(val); };
+    auto sub_row = [=] __device__(Int const& offset) { d_x[offset] -= tmp[offset / n_col]; };
     
     auto it_start = thrust::make_counting_iterator<Int>(0);
     auto it_end   = thrust::make_counting_iterator<Int>(n_row * n_col);
     
     thrust::transform(thrust::device, d_x, d_x + (n_row * n_col), d_x, exp_op);
     thrust::reduce_by_key(
-      thrust::device,
+      thrust::cuda::par.on(stream),
       thrust::make_transform_iterator(it_start, floor_functor(n_col)),
       thrust::make_transform_iterator(it_end, floor_functor(n_col)),
       d_x,
       thrust::make_discard_iterator(),
       tmp
     );
-    thrust::transform(thrust::device, tmp, tmp + n_row, tmp, log_op);
-    thrust::transform(thrust::device, d_x, d_x + (n_row * n_col), d_x, log_op);
-    thrust::for_each(thrust::device, it_start, it_end, sub_row);
+    thrust::transform(thrust::cuda::par.on(stream), tmp, tmp + n_row, tmp, log_op);
+    thrust::transform(thrust::cuda::par.on(stream), d_x, d_x + (n_row * n_col), d_x, log_op);
+    thrust::for_each(thrust::cuda::par.on(stream), it_start, it_end, sub_row);
   }
   
-  void RowSoftmax2(const Int n_row, const Int n_col, Real* d_x) {
+  void RowSoftmax2(const Int n_row, const Int n_col, Real* d_x, cudaStream_t stream) {
     Real* tmp;
     cudaMalloc(&tmp, n_row * sizeof(Real));
-    RowSoftmax2_prealloc(n_row, n_col, d_x, tmp);
+    RowSoftmax2_prealloc(n_row, n_col, d_x, tmp, stream);
     cudaFree(tmp);
   }
 
@@ -134,14 +170,14 @@ namespace ac {
     };
 
     thrust::for_each_n(
-      thrust::device, 
+      thrust::device,
       thrust::make_counting_iterator<Int>(0), 
       data_num_nodes * patt_num_edges, 
       fill
     );
     
     thrust::for_each_n(
-      thrust::device, 
+      thrust::device,
       thrust::make_counting_iterator<Int>(0), 
       data_num_edges * patt_num_edges, 
       op
@@ -154,14 +190,19 @@ namespace ac {
     Int patt_num_edges,
     Int data_num_nodes,
     Int data_num_edges,
-    Real* g_CE_t,
-    Real* g_VY_t,
-    Real* g_VYmax,
-    Real* g_XE_t,
-    Real* g_XE_tmp,
-    Real* g_XMax_t,
-    Int* srcs,
-    Int* nodes
+    Real** all_CE_t,
+    Real** all_VY_t,
+    Real** all_VYmax,
+    Real** all_XE_t,
+    Real** all_XE_tmp,
+    Real** all_XMax_t,
+    Int** all_srcs,
+    Int** all_nodes,
+    Int n_gpus,
+    Int* starts,
+    Int* ends,
+    Real* XMax_t_out,
+    std::vector<gpu_info> infos
   ) {
     
     // VY_t   : (patt_num_edges, data_num_nodes) // read from subset of rows
@@ -171,46 +212,21 @@ namespace ac {
     
     // Broadcast CE_t
     
-    Int n_gpus     = 2;
-    Int* starts    = (Int*)malloc(n_gpus * sizeof(Int));
-    Int* ends      = (Int*)malloc(n_gpus * sizeof(Int));
-    Int chunk_size = (patt_num_edges + n_gpus - 1) / n_gpus;
-    for(Int i = 0; i < n_gpus; i++) {
-        starts[i] = i       * chunk_size;
-        ends[i]   = (i + 1) * chunk_size;
-    }
-    ends[n_gpus - 1] = patt_num_edges;
-    
-    for(Int i = 0; i < n_gpus; i++) {
+    #pragma omp parallel for num_threads(n_gpus)
+    for(Int gid = 0; gid < n_gpus; gid++) {
       
-      Int start = starts[i];
-      Int end   = ends[i];
+      Int start = starts[gid];
+      Int end   = ends[gid];
       Int size  = end - start;
       
-      Real* CE_t;
-      Real* VY_t;
-      Real* VYmax;
-      Real* XE_t;
-      Real* XE_tmp;
-      Real* XMax_t;
-      
-      cudaMalloc(&VYmax,                    size * sizeof(Real)); // local
-      cudaMalloc(&CE_t,    data_num_edges * size * sizeof(Real)); // static
-      cudaMalloc(&XE_t,    data_num_edges * size * sizeof(Real)); // local
-      cudaMalloc(&VY_t,    data_num_nodes * size * sizeof(Real)); // needs copy to
-      cudaMalloc(&XMax_t,  data_num_nodes * size * sizeof(Real)); // needs copy back
-      cudaMalloc(&XE_tmp,                   size * sizeof(Real)); // local
-      
-      // also need static local copies of `data.srcs` and `data.dsts`
-      
-      cudaMemcpy(VYmax,    g_VYmax + start,                    size * sizeof(Real),  cudaMemcpyDeviceToDevice);
-      cudaMemcpy(CE_t,      g_CE_t + start * data_num_edges,   data_num_edges * size * sizeof(Real),  cudaMemcpyDeviceToDevice);
-      cudaMemcpy(XE_t,      g_XE_t + start * data_num_edges,   data_num_edges * size * sizeof(Real),  cudaMemcpyDeviceToDevice);
-      cudaMemcpy(VY_t,      g_VY_t + start * data_num_nodes,   data_num_nodes * size * sizeof(Real),  cudaMemcpyDeviceToDevice);
-      cudaMemcpy(XMax_t,  g_XMax_t + start * data_num_nodes,   data_num_nodes * size * sizeof(Real),  cudaMemcpyDeviceToDevice);
-      cudaMemcpy(XE_tmp,  g_XE_tmp + start,                    size * sizeof(Real),  cudaMemcpyDeviceToDevice);
-
-      // --
+      Real* CE_t   = all_CE_t[gid];
+      Real* VY_t   = all_VY_t[gid];
+      Real* VYmax  = all_VYmax[gid];
+      Real* XE_t   = all_XE_t[gid];
+      Real* XE_tmp = all_XE_tmp[gid];
+      Real* XMax_t = all_XMax_t[gid];
+      Int* srcs    = all_srcs[gid];
+      Int* nodes   = all_nodes[gid];
       
       auto update_XE = [=] __device__(Int const& offset) {
         Int r        = offset / data_num_edges;
@@ -218,11 +234,12 @@ namespace ac {
         XE_t[offset] = VY_t[data_num_nodes * r + srcs[c]] - CE_t[offset];
       };
       thrust::for_each_n(
-        thrust::device,
+        thrust::cuda::par.on(infos[gid].stream),
         thrust::make_counting_iterator<Int>(0),
-        size * data_num_edges,         // chunk: size
+        size * data_num_edges,
         update_XE
       );
+      cudaStreamWaitEvent(infos[gid].stream, infos[gid].event, 0);
       
       // --
       
@@ -230,13 +247,13 @@ namespace ac {
       thrust::maximum<Real> binary_op;
       
       thrust::reduce_by_key(
-        thrust::device,
+        thrust::cuda::par.on(infos[gid].stream),
         thrust::make_transform_iterator(
           thrust::make_counting_iterator<Int>(0), 
           floor_functor(data_num_nodes)
         ),
         thrust::make_transform_iterator(
-          thrust::make_counting_iterator<Int>(size * data_num_nodes), // chunk: size
+          thrust::make_counting_iterator<Int>(size * data_num_nodes),
           floor_functor(data_num_nodes)
         ),
         VY_t,
@@ -252,29 +269,31 @@ namespace ac {
       auto log_op  = [=] __device__(Real const& val) -> Real { return log(val); };
       auto sub_row = [=] __device__(Int const& idx)  -> void { XE_t[idx] -= XE_tmp[idx / data_num_edges]; };
           
-      thrust::transform(thrust::device, XE_t, XE_t + (size * data_num_edges), XE_t, exp_op);
+      thrust::transform(thrust::cuda::par.on(infos[gid].stream), XE_t, XE_t + (size * data_num_edges), XE_t, exp_op);
       thrust::reduce_by_key(
-        thrust::device,
+        thrust::cuda::par.on(infos[gid].stream),
         thrust::make_transform_iterator(
           thrust::make_counting_iterator<Int>(0),
           floor_functor(data_num_edges)
         ),
         thrust::make_transform_iterator(
-          thrust::make_counting_iterator<Int>(size * data_num_edges), // chunk: size
+          thrust::make_counting_iterator<Int>(size * data_num_edges),
           floor_functor(data_num_edges)
         ),
         XE_t,
         thrust::make_discard_iterator(),
         XE_tmp
       );
-      thrust::transform(thrust::device, XE_tmp, XE_tmp + size, XE_tmp, log_op);
-      thrust::transform(thrust::device, XE_t, XE_t + (size * data_num_edges), XE_t, log_op);
+      
+      thrust::transform(thrust::cuda::par.on(infos[gid].stream), XE_tmp, XE_tmp + size, XE_tmp, log_op);
+      thrust::transform(thrust::cuda::par.on(infos[gid].stream), XE_t, XE_t + (size * data_num_edges), XE_t, log_op);
       thrust::for_each(
-        thrust::device,
+        thrust::cuda::par.on(infos[gid].stream),
         thrust::make_counting_iterator<Int>(0),
-        thrust::make_counting_iterator<Int>(size * data_num_edges), // chunk: size
+        thrust::make_counting_iterator<Int>(size * data_num_edges),
         sub_row
       );
+      
       
       // --
       
@@ -287,29 +306,29 @@ namespace ac {
         Int c = offset % data_num_edges;
         atomicMax(XMax_t + (data_num_nodes * r) + nodes[c], XE_t[offset]);
       };
-
+      
       thrust::for_each_n(
-        thrust::device, 
+        thrust::cuda::par.on(infos[gid].stream), 
         thrust::make_counting_iterator<Int>(0), 
-        size * data_num_nodes, // chunk: size (?)
+        size * data_num_nodes,
         fill_op
       );
       
       thrust::for_each_n(
-        thrust::device, 
+        thrust::cuda::par.on(infos[gid].stream), 
         thrust::make_counting_iterator<Int>(0), 
-        size * data_num_edges, // chunk: size (?)
+        size * data_num_edges,
         max_op
-      );      
+      );
       
-      cudaMemcpy(g_XMax_t + (data_num_nodes * start),  XMax_t,   data_num_nodes * size * sizeof(Real),  cudaMemcpyDeviceToDevice);
+      thrust::copy_n(
+        thrust::cuda::par.on(infos[gid].stream),
+        XMax_t,
+        data_num_nodes * size,
+        XMax_t_out + (data_num_nodes * start)
+      );
       
-      cudaFree(VYmax);
-      cudaFree(CE_t);
-      cudaFree(XE_t);
-      cudaFree(VY_t);
-      cudaFree(XMax_t);
-      cudaFree(XE_tmp);
+      cudaEventRecord(infos[gid].event, infos[gid].stream);
     }
   }
   
@@ -323,7 +342,8 @@ namespace ac {
     Real* RMax_t,
     Int* srcs,
     Int* dsts,
-    Real* MU_t
+    Real* MU_t,
+    cudaStream_t stream
   ) {
     
     auto mu_op = [=] __device__(Int const& offset) {
@@ -335,7 +355,7 @@ namespace ac {
     };
     
     thrust::transform(
-      thrust::device,
+      thrust::cuda::par.on(stream),
       CV_t,
       CV_t + (n_col_out * n_row_out),
       MU_t,
@@ -343,7 +363,7 @@ namespace ac {
     );
     
     thrust::for_each_n(
-      thrust::device,
+      thrust::cuda::par.on(stream),
       thrust::make_counting_iterator<Int>(0),
       n_col_in * n_row_in,
       mu_op

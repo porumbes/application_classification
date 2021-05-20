@@ -65,6 +65,11 @@ void loadGraph(std::string inpath, Graph* d_graph) {
 
 int main ( int argc, char * argv[] ) {
 
+  cudaStream_t master_stream;
+  cudaEvent_t master_event;
+  cudaStreamCreateWithFlags(&master_stream, cudaStreamNonBlocking);
+  cudaEventCreate(&master_event);
+
   // --
   // IO
 
@@ -120,12 +125,13 @@ int main ( int argc, char * argv[] ) {
   thrust::transform(thrust::device, CE_t, CE_t + (patt.num_nodes * data.num_nodes), RE_t, [=] __device__ (Real const& val) {return - val;});
   thrust::transform(thrust::device, CE_t, CE_t + (patt.num_nodes * data.num_nodes), FE_t, [=] __device__ (Real const& val) {return - val;});
 
-  ac::RowSoftmax2(patt.num_nodes, data.num_nodes, CV_t);
-  ac::RowSoftmax2(patt.num_nodes, data.num_nodes, MU_t);
-  ac::RowSoftmax2(patt.num_edges, data.num_edges, CE_t);
-  ac::RowSoftmax2(patt.num_edges, data.num_edges, RE_t);
-  ac::RowSoftmax2(patt.num_edges, data.num_edges, FE_t);
-
+  ac::RowSoftmax2(patt.num_nodes, data.num_nodes, CV_t, master_stream);
+  ac::RowSoftmax2(patt.num_nodes, data.num_nodes, MU_t, master_stream);
+  ac::RowSoftmax2(patt.num_edges, data.num_edges, CE_t, master_stream);
+  ac::RowSoftmax2(patt.num_edges, data.num_edges, RE_t, master_stream);
+  ac::RowSoftmax2(patt.num_edges, data.num_edges, FE_t, master_stream);
+  cudaDeviceSynchronize();
+  
   auto init_VX = [=] __device__(Int const& offset) {
       Int i        = offset % data.num_nodes;
       Int j        = offset / data.num_nodes;
@@ -154,8 +160,64 @@ int main ( int argc, char * argv[] ) {
   
   nvtxRangePop();
   
+  Int n_gpus = 4;
+    
+  std::vector<gpu_info> infos;
+  
+  for(Int i = 0 ; i < n_gpus ; i++) {
+      gpu_info info;
+      // cudaSetDevice(i);
+      cudaStreamCreateWithFlags(&info.stream, cudaStreamNonBlocking);
+      cudaEventCreate(&info.event);
+      infos.push_back(info);
+  }
+
+  Int* starts    = (Int*)malloc(n_gpus * sizeof(Int));
+  Int* ends      = (Int*)malloc(n_gpus * sizeof(Int));
+  Int chunk_size = (patt.num_edges + n_gpus - 1) / n_gpus;
+  for(Int i = 0; i < n_gpus; i++) {
+      starts[i] = i       * chunk_size;
+      ends[i]   = (i + 1) * chunk_size;
+  }
+  ends[n_gpus - 1] = patt.num_edges;
+  
+  Real** all_CE_t = (Real**)malloc(n_gpus * sizeof(Real*));
+  shard_n(CE_t, all_CE_t, n_gpus, patt.num_edges, data.num_edges, starts, ends);
+
+  Real** all_FE_t = (Real**)malloc(n_gpus * sizeof(Real*));
+  Real** all_RE_t = (Real**)malloc(n_gpus * sizeof(Real*));
+  shard_n(FE_t, all_FE_t, n_gpus, patt.num_edges, data.num_edges, starts, ends);
+  shard_n(RE_t, all_RE_t, n_gpus, patt.num_edges, data.num_edges, starts, ends);
+  
+  Real** all_VF_t = (Real**)malloc(n_gpus * sizeof(Real*));
+  Real** all_VR_t = (Real**)malloc(n_gpus * sizeof(Real*));
+  shard_n(VF_t, all_VF_t, n_gpus, patt.num_edges, data.num_nodes, starts, ends);
+  shard_n(VR_t, all_VR_t, n_gpus, patt.num_edges, data.num_nodes, starts, ends);
+
+  Real** all_FMax_t = (Real**)malloc(n_gpus * sizeof(Real*));
+  Real** all_RMax_t = (Real**)malloc(n_gpus * sizeof(Real*));
+  shard_n(FMax_t, all_FMax_t, n_gpus, patt.num_edges, data.num_nodes, starts, ends);
+  shard_n(RMax_t, all_RMax_t, n_gpus, patt.num_edges, data.num_nodes, starts, ends);
+
+  Real** all_VFmax = (Real**)malloc(n_gpus * sizeof(Real*));
+  Real** all_VRmax = (Real**)malloc(n_gpus * sizeof(Real*));
+  shard_n(VFmax, all_VFmax, n_gpus, patt.num_edges, 1, starts, ends);
+  shard_n(VRmax, all_VRmax, n_gpus, patt.num_edges, 1, starts, ends);
+  
+  Real** all_FE_tmp = (Real**)malloc(n_gpus * sizeof(Real*));
+  Real** all_RE_tmp = (Real**)malloc(n_gpus * sizeof(Real*));
+  shard_n(FE_tmp, all_FE_tmp, n_gpus, patt.num_edges, 1, starts, ends);
+  shard_n(RE_tmp, all_RE_tmp, n_gpus, patt.num_edges, 1, starts, ends);
+    
+  Int** all_data_srcs = (Int**)malloc(n_gpus * sizeof(Int**));
+  Int** all_data_dsts = (Int**)malloc(n_gpus * sizeof(Int**));
+  copy_n(data.srcs, all_data_srcs, n_gpus, data.num_edges, 1);
+  copy_n(data.dsts, all_data_dsts, n_gpus, data.num_edges, 1);
+  
   // --
   // Run
+
+  cudaDeviceSynchronize();
 
   for (Int i = 0; i < patt.num_nodes; i++) {
     nvtxRangePushA("loop");
@@ -169,41 +231,65 @@ int main ( int argc, char * argv[] ) {
       VR_t[offset] = MU_t[data.num_nodes * patt.srcs[r] + c] - RMax_t[offset];
     };
     thrust::for_each_n(
-      thrust::device,
+      thrust::cuda::par.on(master_stream),
       thrust::make_counting_iterator<Int>(0),
       data.num_nodes * patt.num_edges,
       update_VX
     );
+    cudaEventRecord(master_event, master_stream);
+    cudaStreamWaitEvent(master_stream, master_event, 0);
     nvtxRangePop();
+    
+    cudaDeviceSynchronize();
+    shard_n_prealloc(VF_t, all_VF_t, n_gpus, patt.num_edges, data.num_nodes, starts, ends);
+    shard_n_prealloc(VR_t, all_VR_t, n_gpus, patt.num_edges, data.num_nodes, starts, ends);
+    cudaDeviceSynchronize();
     
     nvtxRangePushA("updateXMax_t:1");
     ac::updateXMax_t(
       patt.num_nodes, patt.num_edges, data.num_nodes, data.num_edges,
-      CE_t,
-      VF_t,
-      VFmax,
-      RE_t,
-      RE_tmp,
+      all_CE_t,
+      all_VF_t,
+      all_VFmax,
+      all_RE_t,
+      all_RE_tmp,
+      all_RMax_t,
+      all_data_srcs,
+      all_data_srcs,
+      n_gpus,
+      starts,
+      ends,
       RMax_t,
-      data.srcs,
-      data.srcs
+      infos
     );
+    
     nvtxRangePop();
     
     nvtxRangePushA("updateXMax_t:2");
     ac::updateXMax_t(
       patt.num_nodes, patt.num_edges, data.num_nodes, data.num_edges,
-      CE_t,
-      VR_t,
-      VRmax,
-      FE_t,
-      FE_tmp,
+      all_CE_t,
+      all_VR_t,
+      all_VRmax,
+      all_FE_t,
+      all_FE_tmp,
+      all_FMax_t,
+      all_data_srcs,
+      all_data_dsts,
+      n_gpus,
+      starts,
+      ends,
       FMax_t,
-      data.srcs,
-      data.dsts
+      infos
     );
-    nvtxRangePop();
+    
+    cudaDeviceSynchronize();
+    for(Int gid = 0; gid < n_gpus; gid++)
+        cudaStreamWaitEvent(master_stream, infos[gid].event, 0);
+    cudaStreamSynchronize(master_stream);
 
+    nvtxRangePop();
+    
     nvtxRangePushA("ComputeMU2_t");
     // random row-write -- BAD
     ac::ComputeMU2_t(
@@ -213,11 +299,18 @@ int main ( int argc, char * argv[] ) {
       RMax_t,
       patt.srcs,
       patt.dsts,
-      MU_t
+      MU_t,
+      master_stream
     );
-    
+
+    cudaEventRecord(master_event, master_stream);
+    cudaStreamWaitEvent(master_stream, master_event, 0);
+
     // simple row-wise -- OK
-    ac::RowSoftmax2_prealloc(patt.num_nodes, data.num_nodes, MU_t, MU_tmp);
+    ac::RowSoftmax2_prealloc(patt.num_nodes, data.num_nodes, MU_t, MU_tmp, master_stream);
+    cudaEventRecord(master_event, master_stream);
+    cudaStreamWaitEvent(master_stream, master_event, 0);
+
     nvtxRangePop();
     
     nvtxRangePop();
