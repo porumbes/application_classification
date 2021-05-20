@@ -263,13 +263,7 @@ int main ( int argc, char * argv[] ) {
     nvtxRangePushA("loop");
     
     nvtxRangePushA("update_VX");
-    
-    for(Int i = 0; i < n_gpus; i++) {
-      cudaSetDevice(i);
-      cudaDeviceSynchronize();
-      cudaSetDevice(0);
-    }
-    
+        
     // random row access -- BAD
     #pragma omp parallel for num_threads(n_gpus)
     for(Int gid = 0; gid < n_gpus; gid++) {
@@ -302,10 +296,6 @@ int main ( int argc, char * argv[] ) {
     }
 
     nvtxRangePop();
-        
-    // shard_n_prealloc(VF_t, all_VF_t, n_gpus, patt.num_edges, data.num_nodes, starts, ends);
-    // shard_n_prealloc(VR_t, all_VR_t, n_gpus, patt.num_edges, data.num_nodes, starts, ends);
-
     
     nvtxRangePushA("updateXMax_t");
     ac::updateXMax_t(
@@ -342,7 +332,6 @@ int main ( int argc, char * argv[] ) {
       infos
     );
     
-    cudaDeviceSynchronize();
     for(Int gid = 0; gid < n_gpus; gid++)
         cudaStreamWaitEvent(master_stream, infos[gid].event, 0);
     cudaStreamSynchronize(master_stream);
@@ -361,9 +350,6 @@ int main ( int argc, char * argv[] ) {
       MU_t,
       master_stream
     );
-
-    cudaEventRecord(master_event, master_stream);
-    cudaStreamWaitEvent(master_stream, master_event, 0);
 
     // simple row-wise -- OK
     ac::RowSoftmax2_prealloc(patt.num_nodes, data.num_nodes, MU_t, MU_tmp, master_stream);
