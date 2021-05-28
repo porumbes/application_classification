@@ -224,6 +224,10 @@ int main ( int argc, char * argv[] ) {
 
   cuda_timer_t timer;
   timer.start();
+
+  cuda_timer_t prep_timer;
+  prep_timer.start();
+
   nvtxRangePushA("start");
   
   nvtxRangePushA("prep");
@@ -269,7 +273,11 @@ int main ( int argc, char * argv[] ) {
   );
   
   nvtxRangePop();
+  auto prep_elapsed = prep_timer.stop();
   
+  cuda_timer_t scatter_timer;
+  scatter_timer.start();
+
   nvtxRangePushA("scatter");
 
   shard_n(CE_t, all_CE_t, n_gpus, patt.num_edges, data.num_edges, starts, ends);
@@ -290,6 +298,10 @@ int main ( int argc, char * argv[] ) {
   }
 
   nvtxRangePop();
+  auto scatter_elapsed = scatter_timer.stop();
+  
+  cuda_timer_t loop_timer;
+  loop_timer.start();
   
   // --
   // Run
@@ -403,8 +415,15 @@ int main ( int argc, char * argv[] ) {
   }
 
   nvtxRangePop();
+  auto loop_elapsed = loop_timer.stop();
   long long elapsed = timer.stop();
-  std::cerr << "elapsed=" << elapsed << std::endl;
+  std::cerr 
+    << "elapsed="            << elapsed 
+    << " | prep_elapsed="    << prep_elapsed 
+    << " | scatter_elapsed=" << scatter_elapsed 
+    << " | loop_elapsed="    << loop_elapsed 
+    << " | n_gpus="          << n_gpus
+  << std::endl;
 
   // --
   // Copy results to host and print
