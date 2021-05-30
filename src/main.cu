@@ -5,6 +5,15 @@
 #include "ac.hxx"
 #include "helpers.hxx"
 
+#include <cuda.h>               /* for Gpuinfo */
+#include <cuda_runtime_api.h>   /* for Gpuinfo */
+#include <iomanip>
+#include <cstdlib>
+#include <fstream>
+#include <sstream>
+#include "json.hpp"
+using json = nlohmann::json;
+
 typedef struct Graph {
   Int   num_nodes;
   Int   node_feat_dim;
@@ -62,6 +71,36 @@ void loadGraph(std::string inpath, Graph* d_graph) {
   cudaMemcpy(d_graph->dsts,       dsts,       num_edges                 * sizeof(Int), cudaMemcpyHostToDevice);
 }
 
+json gpu_info_json() {
+    json j;
+    cudaDeviceProp devProps;
+
+    int deviceCount;
+    cudaGetDeviceCount(&deviceCount);
+    if (deviceCount == 0)   /* no valid devices */
+    {
+        return j;        /* empty */
+    }
+    int dev = 0;
+    cudaGetDevice(&dev);
+    cudaGetDeviceProperties(&devProps, dev);
+    j["gpuinfo"]["name"] = devProps.name;
+    j["gpuinfo"]["total_global_mem"] = int64_t(devProps.totalGlobalMem);
+    j["gpuinfo"]["major"] = devProps.major;
+    j["gpuinfo"]["minor"] = devProps.minor;
+    j["gpuinfo"]["clock_rate"] = devProps.clockRate;
+    j["gpuinfo"]["multi_processor_count"] = devProps.multiProcessorCount;
+
+    int runtimeVersion, driverVersion;
+    cudaRuntimeGetVersion(&runtimeVersion);
+    cudaDriverGetVersion(&driverVersion);
+    j["gpuinfo"]["driver_api"] = CUDA_VERSION;
+    j["gpuinfo"]["driver_version"] = driverVersion;
+    j["gpuinfo"]["runtime_version"] = runtimeVersion;
+    j["gpuinfo"]["compute_version"] = devProps.major * 10 + devProps.minor;
+
+    return j;
+}
 
 int main ( int argc, char * argv[] ) {
 
@@ -417,19 +456,66 @@ int main ( int argc, char * argv[] ) {
   nvtxRangePop();
   auto loop_elapsed = loop_timer.stop();
   long long elapsed = timer.stop();
-  std::cerr 
+#if 1 
+  std::cout 
     << "elapsed="            << elapsed 
     << " | prep_elapsed="    << prep_elapsed 
     << " | scatter_elapsed=" << scatter_elapsed 
     << " | loop_elapsed="    << loop_elapsed 
     << " | n_gpus="          << n_gpus
   << std::endl;
+#endif
 
   // --
   // Copy results to host and print
 
+#if 0
   ac::transpose(MU_t, MU, patt.num_nodes, data.num_nodes);
   Real *h_MU = (Real *) malloc(data.num_nodes * patt.num_nodes * sizeof(Real));
   cudaMemcpy(h_MU, MU, data.num_nodes * patt.num_nodes * sizeof(Real), cudaMemcpyDeviceToHost);
   for (Int i = 0; i < data.num_nodes * patt.num_nodes; i ++) printf("%e\n", h_MU[i]);
+#endif
+
+
+
+  auto j = gpu_info_json();
+
+  // save the command line
+  std::ostringstream command_line;
+  for(int i = 0; i < argc; i++) {
+      command_line << argv[i] << " ";
+  }
+  j["command-line"] = command_line.str();
+
+  j["primitive"] = "ac";
+  j["graph-file"] = {std::string(argv[1]), std::string(argv[2])};
+  j["graph-edges"] = {data.num_edges, patt.num_edges};
+  j["graph-nodes"] = {data.num_nodes, patt.num_edges};
+  j["avg-process-time"] = (float)elapsed/1000;
+  time_t now = time(NULL);
+  j["time"] = ctime(&now);
+
+  // get datat.bin name and pattern.bin name for variant
+  auto data_file = std::string(argv[1]);
+  auto s0 = data_file.find_last_of("/") + 1;
+  auto s1 = data_file.find_last_of("_");
+  data_file = data_file.substr(s0, s1-s0);
+  auto pattern_file = std::string(argv[2]);
+  s0 = pattern_file.find_last_of("/") + 1;
+  s1 = pattern_file.find_last_of("_");
+  pattern_file = pattern_file.substr(s0, s1-s0);
+  j["tag"] = {std::string("variant:" + data_file + "-" + pattern_file), 
+	      std::string("num-gpus:") + std::to_string(n_gpus)};
+
+  // get the dataset from the json
+  auto dataset = std::string(argv[3]);
+  std::size_t p1 = dataset.find("ac__") + 4; // skip the expected "ac__"
+  std::size_t p2 = dataset.find("__GPU");
+  j["dataset"] = dataset.substr(p1, p2-p1);
+
+  std::cout << '\n' << std::setw(4) << j << '\n';
+  std::ofstream output_json(argv[3]);
+  output_json << std::setw(4) << j << std::endl;
+
+  return 0;
 }
